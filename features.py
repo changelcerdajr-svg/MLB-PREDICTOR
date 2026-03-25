@@ -64,45 +64,45 @@ class FeatureEngine:
         # La fatiga resta capacidad defensiva 
         # (Delta empírico: un bullpen exhausto (1.0) añade ~0.35 carreras al RA/9 esperado)
         final_prevention = (prevention_score * fielding_factor) - (fatigue * 0.35)
-        
         return max(0.1, final_prevention * (2.0 - umpire_factor))
 
     def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00):
         """
         Motor Estocástico V11.5. 
-        Implementa HFA explícita y parameterización NegBinomial empírica (VMR=2.65).
+        Implementa HFA explícita y parameterización NegBinomial dinámica.
         """
         
-        # --- EXPLICIT HOME FIELD ADVANTAGE (HFA) ---
-        # Multiplicador derivado numéricamente: para obtener un 53.5% de win rate 
-        # en una NegBinomial con VMR=2.65, k debe ser ~1.045
+        # 1. Aplicación de Home Field Advantage (HFA) Derivada
+        # Para VMR 2.65, k=1.045 genera el 53.5% de win rate histórico.
         h_lambda = (h_pow * (h_def / league_avg_runs)) * 1.045
         a_lambda = (a_pow * (a_def / league_avg_runs)) * 0.955
         
-        # --- PARAMETERIZACIÓN EMPÍRICA DINÁMICA ---
-        # VMR base de 2.65, ajustado por la altitud/dimensiones del estadio (pf).
-        # Un juego en Coors Field (pf=1.35) tendrá mayor varianza absoluta que uno neutral.
-        target_vmr = 2.65 * pf
+        # 2. VMR Dinámico basado en el Parque
+        # La varianza crece proporcionalmente al factor de carreras del estadio.
+        target_vmr = 2.65 * pf 
         
+        # 3. Función de muestreo Binomial Negativa
         def nbinom_sample(mu, vmr, size):
             if mu <= 0: return np.zeros(size)
             # Aseguramos un VMR > 1 para mantener la dispersión de colas largas
+            # La fórmula r = mu / (VMR - 1) define la 'forma' de la distribución
             safe_vmr = max(1.1, vmr)
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
             return np.random.negative_binomial(r, p, size)
 
+        # 4. Generación de Scores
         h_scores = nbinom_sample(h_lambda, target_vmr, rounds)
         a_scores = nbinom_sample(a_lambda, target_vmr, rounds)
         
+        # 5. Cálculo de Probabilidades e Incertidumbre
         wins_array = (h_scores > a_scores).astype(float)
         ties_mask = (h_scores == a_scores)
-        wins_array[ties_mask] = 0.5 
+        wins_array[ties_mask] = 0.5 # Los empates se dividen (Regla de paridad)
         
         chunks = np.array_split(wins_array, 10)
         chunk_probs = [np.mean(c) for c in chunks]
         
-        # Incertidumbre interna de convergencia
         uncertainty = float(np.std(chunk_probs)) 
         win_prob = float(np.mean(wins_array))
         

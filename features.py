@@ -1,5 +1,5 @@
 # features.py
-# Motor Cuantitativo V11.5 (Física y Estocástica Purificadas)
+# Motor Cuantitativo V12.0 (Física Corregida y VMR Empírico)
 
 import numpy as np
 from config import PARK_FACTORS
@@ -10,33 +10,19 @@ class FeatureEngine:
     def get_park_factor(venue_id):
         return PARK_FACTORS['runs'].get(venue_id, 1.00)
 
-    def calculate_pythagorean_win_pct(self, rs, ra):
-        if rs == 0 and ra == 0: return 0.500
-        rs_pow = pow(rs, 1.83)
-        ra_pow = pow(ra, 1.83)
-        return rs_pow / (rs_pow + ra_pow)
-
-    def calculate_power_score(self, ops, park_factor, weather_temp, wind_speed, umpire_factor, speed_stats, league_avg_runs, team_id, game_date, schedule_data):
+    def calculate_power_score(self, ops, park_factor, league_avg_runs, team_id, game_date, schedule_data):
         """
         Calcula el Poder Ofensivo Puro.
-        Purgado de step-functions y ruido meteorológico no vectorial.
+        Purgado de coeficientes inventados (clima/velocidad) y ruido no calibrado.
         """
         league_ops_base = 0.720
         ops_scale = ops / league_ops_base
         base_runs = ops_scale * league_avg_runs
         
-        # 1. Velocidad (Suavizada): Reemplazamos el step-function por un escalado continuo
-        # Maximo impacto de 2.5% para equipos extremadamente rápidos, sin saltos abruptos.
-        sb_rate = min(max(speed_stats.get('sb_game', 0), 0), 2.5)
-        speed_boost = 1.0 + (sb_rate * 0.01)
-        
-        # 2. Clima Termodinámico: Base 21C, con piso matemático seguro.
-        # El viento se ignora estructuralmente porque carecemos de vector/dirección.
-        weather_impact = max(0.85, 1.0 + ((weather_temp - 21.0) * 0.003))
-        
-        base_score = (base_runs * park_factor * weather_impact * umpire_factor * speed_boost)
+        # El clima y los umpires fueron removidos por ser ruido estadístico (Audit V11.5)
+        base_score = base_runs * park_factor
 
-        # 3. Jetlag (Ventana Rodante Estricta)
+        # Jetlag (A ser corregido en experiments.py en la próxima fase)
         try:
             import experiments
             jetlag_index = experiments.get_jetlag_index(team_id, game_date, schedule_data)
@@ -46,64 +32,77 @@ class FeatureEngine:
             
         return final_score
 
-    def calculate_defense_score(self, p_stats, bullpen_stats, fatigue, umpire_factor, fielding_stats):
+    def calculate_defense_score(self, p_stats, bullpen_stats, fatigue, fielding_stats):
         """
-        Cálculo de Prevención de Carreras.
+        Cálculo de Prevención de Carreras (Escala RA/9 Directa).
+        CORRECCIÓN CRÍTICA: Se eliminó la inversión de escala (9.00 - skill).
+        Ahora un número alto significa que el pitcher permite MÁS carreras (peor defensa).
         """
+        # Skill del abridor basado en FIP bayesiano (Menos es mejor)
         starter_skill = (p_stats['fip'] * 0.70) + (p_stats['era'] * 0.30)
-        starter_prevention = max(0, 9.00 - starter_skill) + (p_stats['k9'] - 7.0) * 0.10
         
-        bullpen_prevention = max(0, 9.00 - bullpen_stats['era'])
-        if bullpen_stats['whip'] > 1.40: bullpen_prevention -= 0.4
+        # Ajuste por ponches: Un K/9 alto reduce el contacto en juego
+        starter_ra9 = max(1.0, starter_skill - ((p_stats['k9'] - 7.0) * 0.10))
         
-        prevention_score = (starter_prevention * 0.60) + (bullpen_prevention * 0.40)
+        bullpen_ra9 = bullpen_stats['era']
+        if bullpen_stats['whip'] > 1.40: 
+            bullpen_ra9 += 0.40 # Castigo por embasar a muchos
         
+        # Combinación de Runs Allowed per 9 innings (Abridor 60%, Bullpen 40%)
+        prevention_score = (starter_ra9 * 0.60) + (bullpen_ra9 * 0.40)
+        
+        # Ajuste de Fildeo: Mal fildeo multiplica las carreras permitidas
         fp = fielding_stats['fielding']
-        fielding_factor = 0.94 if fp < 0.982 else (1.04 if fp > 0.988 else 1.0)
+        fielding_factor = 1.05 if fp < 0.982 else (0.95 if fp > 0.988 else 1.0)
         
-        # La fatiga resta capacidad defensiva 
-        # (Delta empírico: un bullpen exhausto (1.0) añade ~0.35 carreras al RA/9 esperado)
-        final_prevention = (prevention_score * fielding_factor) - (fatigue * 0.35)
-        return max(0.1, final_prevention * (2.0 - umpire_factor))
+        # La fatiga SUMA carreras esperadas al rival
+        final_ra9 = (prevention_score * fielding_factor) + (fatigue * 0.35)
+        
+        return max(1.5, final_ra9) # Ningún equipo previene menos de 1.5 carreras por juego
 
     def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00):
         """
-        Motor Estocástico V11.5. 
-        Implementa HFA explícita y parameterización NegBinomial dinámica.
+        Motor Estocástico V12.0.
+        - BUG RESUELTO: Lambda cruzada (Ofensiva propia vs Defensa rival)
+        - VMR EMPÍRICO: Anclado a 1.8 (Literatura Sabermétrica de Hal Stern)
         """
         
-        # 1. Aplicación de Home Field Advantage (HFA) Derivada
-        # Para VMR 2.65, k=1.045 genera el 53.5% de win rate histórico.
-        h_lambda = (h_pow * (h_def / league_avg_runs)) * 1.045
-        a_lambda = (a_pow * (a_def / league_avg_runs)) * 0.955
+        # 1. EL BUG FATAL CORREGIDO: Cruzamos Ofensiva vs Defensa RIVAL
+        # a_def y h_def están en escala RA/9. Divididos por la media, crean un escalar.
+        # Si el visitante tiene mala defensa (ej. a_def=5.4 frente a media=4.5), su escalar es 1.2
+        # Lo que aumentará las carreras anotadas por el local en un 20%.
+        a_def_scalar = a_def / league_avg_runs
+        h_def_scalar = h_def / league_avg_runs
+
+        # 2. Aplicación de Lambda Correcta y HFA (1.04 Local, 0.96 Visitante)
+        h_lambda = (h_pow * a_def_scalar) * 1.04 
+        a_lambda = (a_pow * h_def_scalar) * 0.96
         
-        # 2. VMR Dinámico basado en el Parque
-        # La varianza crece proporcionalmente al factor de carreras del estadio.
-        target_vmr = 2.65 * pf 
+        # 3. VMR Empírico (Reemplazo del exagerado 2.65 por el documentado 1.8)
+        target_vmr = 1.8 * pf 
         
-        # 3. Función de muestreo Binomial Negativa
+        # 4. Función de muestreo Binomial Negativa
         def nbinom_sample(mu, vmr, size):
             if mu <= 0: return np.zeros(size)
-            # Aseguramos un VMR > 1 para mantener la dispersión de colas largas
-            # La fórmula r = mu / (VMR - 1) define la 'forma' de la distribución
-            safe_vmr = max(1.1, vmr)
+            safe_vmr = max(1.05, vmr) # Protege contra colapso numérico
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
             return np.random.negative_binomial(r, p, size)
 
-        # 4. Generación de Scores
+        # 5. Generación de Scores
         h_scores = nbinom_sample(h_lambda, target_vmr, rounds)
         a_scores = nbinom_sample(a_lambda, target_vmr, rounds)
         
-        # 5. Cálculo de Probabilidades e Incertidumbre
+        # 6. Cálculo Probabilístico
         wins_array = (h_scores > a_scores).astype(float)
         ties_mask = (h_scores == a_scores)
-        wins_array[ties_mask] = 0.5 # Los empates se dividen (Regla de paridad)
+        wins_array[ties_mask] = 0.5 
         
-        chunks = np.array_split(wins_array, 10)
-        chunk_probs = [np.mean(c) for c in chunks]
-        
-        uncertainty = float(np.std(chunk_probs)) 
         win_prob = float(np.mean(wins_array))
         
-        return win_prob, float(np.mean(h_scores)), float(np.mean(a_scores)), uncertainty
+        # 7. Corrección de Incertidumbre
+        # El analista demostró que medir el error estándar de las iteraciones es inútil (siempre da ~0%).
+        # Ahora exportamos la varianza pura del evento Bernoulli: p * (1 - p)
+        bernoulli_variance = win_prob * (1.0 - win_prob)
+        
+        return win_prob, float(np.mean(h_scores)), float(np.mean(a_scores)), bernoulli_variance

@@ -64,13 +64,10 @@ else:
         col2.metric(f"Prob. {selected_game['home_name']}", f"{home_prob:.1f}%")
         col3.metric(f"Prob. {selected_game['away_name']}", f"{away_prob:.1f}%")
         
-        st.markdown(f"**Factor Clave:** `{res['key_factor']}` | **Incertidumbre:** `{res['details']['uncertainty']}`")
+        # ACTUALIZACIÓN V12.1: Mostramos Sensibilidad Real en lugar de Incertidumbre falsa
+        st.markdown(f"**Factor Clave:** `{res['key_factor']}` | **Sensibilidad de Inputs:** `{res['details']['sensitivity']}`")
         st.markdown(f"**Carreraje Esperado:** {res['score']['away']:.1f} - {res['score']['home']:.1f}")
-        
-        # --- MÓDULO FINANCIERO (EV & KELLY) ---
-        st.divider()
-        st.subheader("💰 Ingesta del Mercado (Gestión de Riesgo)")
-        st.markdown("Ingresa los momios americanos actuales para calcular el Criterio de Kelly.")
+        st.caption(f"Varianza del Evento: {res['details'].get('variance', 'N/A')}")
         
         f_col1, f_col2, f_col3 = st.columns(3)
         

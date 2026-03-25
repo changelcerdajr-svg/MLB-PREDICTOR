@@ -14,8 +14,8 @@ st.set_page_config(page_title="MLB Quant Engine", page_icon="⚾", layout="wide"
 def load_predictor():
     return MLBPredictor()
 
-st.title("🏛️ MLB Quant Engine V11.5")
-st.markdown("**Core Estocástico:** NegBinomial (VMR=2.65) | **Calibración:** Regresión Isotónica")
+st.title("🏛️ MLB Quant Engine V12.1")
+st.markdown("**Core Estocástico:** NegBinomial (VMR=1.8 Empírico) | **Riesgo:** Kelly Fraccionario")
 st.divider()
 
 predictor = load_predictor()
@@ -40,12 +40,12 @@ else:
     selected_game = game_options[selected_game_str]
     
     st.sidebar.divider()
-    st.sidebar.info("La simulación ejecuta 100,000 iteraciones estocásticas para calcular la varianza exacta del encuentro.")
+    st.sidebar.info("La simulación ejecuta 10,000 iteraciones estocásticas para calcular la varianza exacta del encuentro.")
 
     # --- MOTOR PREDICTIVO (PANEL CENTRAL) ---
     st.subheader(f"🏟️ Análisis: {selected_game['away_name']} vs {selected_game['home_name']}")
     
-    with st.spinner(f'Corriendo 100,000 simulaciones Monte Carlo...'):
+    with st.spinner(f'Corriendo 10,000 simulaciones Monte Carlo...'):
         res = predictor.predict_game(selected_game)
         
     # Compuertas de Seguridad

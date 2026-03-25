@@ -8,16 +8,26 @@ from umpire import UmpireEngine
 from config import SIMULATION_ROUNDS
 
 class MLBPredictor:
-    # 1. Rompemos la calibración circular permitiendo apagar el calibrador
     def __init__(self, use_calibrator=True):
         self.loader = MLBDataLoader()
         self.engine = FeatureEngine()
         self.umpire = UmpireEngine()
         
         self.calibrator = None
-        if use_calibrator and os.path.exists('isotonic_calibrator.pkl'):
-            with open('isotonic_calibrator.pkl', 'rb') as f:
-                self.calibrator = pickle.load(f)
+        if use_calibrator:
+            try:
+                if os.path.exists('isotonic_calibrator.pkl'):
+                    with open('isotonic_calibrator.pkl', 'rb') as f:
+                        self.calibrator = pickle.load(f)
+                else:
+                    print("Calibrador no encontrado. Intentando entrenar uno nuevo...")
+                    from train_calibration import train_isotonic_calibrator
+                    train_isotonic_calibrator() # Esto genera el .pkl en el servidor
+                    with open('isotonic_calibrator.pkl', 'rb') as f:
+                        self.calibrator = pickle.load(f)
+            except Exception as e:
+                print(f"Error de compatibilidad de Pickle: {e}. El modelo correrá sin calibración.")
+                self.calibrator = None
 
     def predict_game(self, game):
         # 0. Datos Generales (Calendario Rodante)
@@ -27,8 +37,6 @@ class MLBPredictor:
         league_avg_runs = self.loader.get_league_run_environment(game['date'])
         
         # 2. Pitcheo
-        h_hand = self.loader.get_pitcher_hand(game['home_pitcher'])
-        a_hand = self.loader.get_pitcher_hand(game['away_pitcher'])
         h_pstats = self.loader.get_pitcher_fip_stats(game['home_pitcher'])
         a_pstats = self.loader.get_pitcher_fip_stats(game['away_pitcher'])
         h_bullpen = self.loader.get_bullpen_stats(game['home_id'])
@@ -38,7 +46,7 @@ class MLBPredictor:
         h_ops, h_confirmed = self.loader.get_confirmed_lineup_ops(game['id'], 'home')
         a_ops, a_confirmed = self.loader.get_confirmed_lineup_ops(game['id'], 'away')
         
-        # --- COMPUERTAS DE SEGURIDAD ESTRICTAS (Hard "No-Prediction" Gates) ---
+        # --- COMPUERTAS DE SEGURIDAD ESTRICTAS ---
         if abs(h_pstats['fip'] - 4.30) < 0.001 or abs(a_pstats['fip'] - 4.30) < 0.001:
             return {'error': 'Datos de pitcheo insuficientes o Opener detectado. Simulación abortada.'}
             
@@ -60,7 +68,7 @@ class MLBPredictor:
         temp = weather.get('temperature', 21)
         wind = weather.get('windspeed', 5)
 
-        # 6. Cálculo de Scores (Poder Base Puro)
+        # 6. Cálculo de Scores
         h_power = self.engine.calculate_power_score(
             h_ops, pf, temp, wind, ump_data.get('factor', 1.0), h_smallball, league_avg_runs,
             game['home_id'], game['date'], schedule_df 
@@ -84,13 +92,12 @@ class MLBPredictor:
             win_prob = float(self.calibrator.predict([win_prob])[0])
             is_calibrated = True
 
-        winner = game['home_name'] if win_prob > 0.5 else game['away_name']
-        
-        # Eliminamos el "Confidence Floor". Reportamos la prob pura del Local.
         home_win_prob = win_prob
         away_win_prob = 1.0 - win_prob
+        winner = game['home_name'] if win_prob > 0.5 else game['away_name']
+        confidence = home_win_prob if winner == game['home_name'] else away_win_prob
 
-        # 9. Factor Clave
+        # 9. Factor Clave (Lógica de reporte)
         if uncertainty > 0.035:
             key = "ALTA VOLATILIDAD / RIESGO"
         elif h_fatigue > 0.25 or a_fatigue > 0.25:
@@ -103,10 +110,10 @@ class MLBPredictor:
         return {
             'game': f"{game['away_name']} @ {game['home_name']}",
             'winner': winner,
-            'home_prob': home_win_prob,  # Exportamos métricas absolutas, no relativas
+            'home_prob': home_win_prob,
             'away_prob': away_win_prob,
-            'confidence': home_win_prob if winner == game['home_name'] else away_win_prob, # Mantenido solo compatibilidad UI vieja
-            'score': {'home': h_runs, 'away': a_runs, 'total': h_runs+a_runs},
+            'confidence': confidence,
+            'score': {'home': h_runs, 'away': a_runs, 'total': h_runs + a_runs},
             'details': {
                 'uncertainty': f"±{uncertainty*100:.2f}%",
                 'pitching': f"H: FIP {h_pstats['fip']:.2f} | A: FIP {a_pstats['fip']:.2f}",

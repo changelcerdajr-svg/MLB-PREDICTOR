@@ -195,13 +195,12 @@ class MLBDataLoader:
                     p_ops = ops_map.get(pid, LEAGUE_AVG_OPS)
                     weighted_sum += (p_ops * w)
                     total_weight += w
-            if total_weight > 0: return (weighted_sum / total_weight, True)
-        except: pass
-        
-        # SI ESTAMOS EN MODO HISTÓRICO, FORZAMOS TRUE PARA NO ROMPER EL ENTRENAMIENTO
-        if getattr(self, '_force_historical_mode', False):
-            return (0.720, True) # Forzamos éxito en el pasado
+            if total_weight > 0: 
+                return (weighted_sum / total_weight, True)
+        except Exception as e: 
+            pass
             
+        # Si no encontró lineups reales en la API, falla con dignidad. No más datos falsos.
         return (None, False)
 
     def get_team_fielding_speed(self, team_id):

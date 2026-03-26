@@ -13,7 +13,7 @@ GAMES_TO_AUDIT = 600
 def run_calibration():
     print("\n" + "⚖️  "*10)
     print(f"   INICIANDO AUDITORÍA DE CALIBRACIÓN")
-    print(f"   Motor: V10.1 (Bayesian + Dynamic)")
+    print(f"   Motor: V13.0 (Strict Out-of-Sample / No Imputation)")
     print("⚖️  "*10 + "\n")
 
     predictor = MLBPredictor()

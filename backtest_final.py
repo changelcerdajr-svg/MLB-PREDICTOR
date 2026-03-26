@@ -1,21 +1,25 @@
 # backtest_final.py
-# Auditoría Institucional Out-of-Sample - V12.2
+# Auditoría Institucional Out-of-Sample - V13.2 (Filtro de Confianza)
 import sys
 from datetime import datetime, timedelta
 from model import MLBPredictor
 
 # --- CONFIGURACIÓN DEL BACKTEST ---
-START_DATE = "2024-07-01"  # FIREWALL TEMPORAL: Estricto Out-of-Sample (post-calibración)
-DAYS_TO_TEST = 60          # Tamaño de la muestra (2 meses)
+START_DATE = "2024-07-01"  
+DAYS_TO_TEST = 60          
+MIN_CONFIDENCE = 0.55      # NUEVO: El modelo solo opera si la confianza es >= 55%
 
 def run_backtest():
     print("="*50)
-    print(" 🔬 AUDITORÍA INSTITUCIONAL V12.2 (Out-of-Sample)")
+    print(" 🔬 AUDITORÍA INSTITUCIONAL V13.2 (Out-of-Sample)")
     print(f" 📅 Desde: {START_DATE} | Periodo: {DAYS_TO_TEST} días")
+    print(f" 🎯 Filtro de Confianza (Threshold): {MIN_CONFIDENCE*100}%")
     print("="*50)
 
     try:
         predictor = MLBPredictor()
+        # FIX ESTRUCTURAL: El modo histórico se activa UNA SOLA VEZ para todo el backtest
+        predictor.loader._force_historical_mode = True
     except Exception as e:
         print(f"Error inicializando el motor: {e}")
         return
@@ -23,19 +27,23 @@ def run_backtest():
     current_date = datetime.strptime(START_DATE, "%Y-%m-%d")
     
     # Contadores Maestros
-    total_processed = 0
-    correct_predictions = 0
+    total_valid_games = 0
     rejected_games = 0
-    home_wins_in_accepted = 0  # NUEVO: Contador para el Baseline Dinámico
+    
+    # Contadores de Apuestas (Actionable Games)
+    games_bet = 0
+    correct_bets = 0
+    home_wins_in_bets = 0 
 
     for i in range(DAYS_TO_TEST):
         test_date = current_date.strftime("%Y-%m-%d")
-        print(f"Procesando: {test_date}...")
+        # Imprimimos en la misma línea para no saturar la terminal
+        sys.stdout.write(f"\rProcesando: {test_date}...")
+        sys.stdout.flush()
         
         try:
-            games = predictor.loader.get_schedule(test_date) # LÍNEA CORREGIDA
+            games = predictor.loader.get_schedule(test_date)
         except Exception as e:
-            print(f"  [!] Error obteniendo juegos: {e}")
             current_date += timedelta(days=1)
             continue
             
@@ -44,10 +52,6 @@ def run_backtest():
             continue
 
         for game in games:
-            # INYECCIÓN: Apagamos validación de lineups vivos para probar datos históricos
-            predictor.loader._force_historical_mode = True
-
-            # BUG CORREGIDO: Leemos el marcador real del diccionario correcto
             home_score = game['real_score']['home']
             away_score = game['real_score']['away']
             
@@ -59,56 +63,60 @@ def run_backtest():
             # Ejecutamos la predicción
             res = predictor.predict_game(game)
             
-            # La Compuerta de Riesgo (Rechazos)
+            # Compuerta 1: Riesgo (Datos Incompletos)
             if 'error' in res:
                 rejected_games += 1
                 continue
                 
-            total_processed += 1
+            total_valid_games += 1
             predicted_winner = res['winner']
+            confidence = res['confidence']
             
-            # Evaluamos Precisión
-            if predicted_winner == real_winner:
-                correct_predictions += 1
+            # Compuerta 2: Filtro de Confianza (El Sniper)
+            if confidence >= MIN_CONFIDENCE:
+                games_bet += 1
                 
-            # Evaluamos el Baseline Real de esta submuestra
-            if real_winner == game['home_name']:
-                home_wins_in_accepted += 1
+                if predicted_winner == real_winner:
+                    correct_bets += 1
+                    
+                if real_winner == game['home_name']:
+                    home_wins_in_bets += 1
                 
         # Avanzamos al siguiente día
         current_date += timedelta(days=1)
         
     # --- REPORTE FINAL ---
-    total_games = total_processed + rejected_games
     print("\n\n" + "="*50)
-    print(" 📊 RESULTADOS OUT-OF-SAMPLE (V12.2)")
+    print(" 📊 RESULTADOS OUT-OF-SAMPLE (V13.2)")
     print("="*50)
     
-    if total_games > 0:
-        rejection_rate = (rejected_games / total_games) * 100
-        print(f" 🛑 Tasa de Rechazo (Falta Info): {rejection_rate:.1f}% ({rejected_games}/{total_games})")
+    total_games_seen = total_valid_games + rejected_games
+    if total_games_seen > 0:
+        print(f" 🛑 Rechazos por falta de datos: {(rejected_games/total_games_seen)*100:.1f}% ({rejected_games}/{total_games_seen})")
+        
+        ignored_games = total_valid_games - games_bet
+        print(f" 🙈 Juegos ignorados (Baja Confianza < {MIN_CONFIDENCE*100}%): {ignored_games}")
         print("-" * 50)
         
-        if total_processed > 0:
-            accuracy = (correct_predictions / total_processed) * 100
-            print(f" 🎯 ACCURACY REAL: {accuracy:.2f}% ({correct_predictions}/{total_processed})")
-            
-            # CÁLCULO DE LIFT INSTITUCIONAL
-            real_baseline = (home_wins_in_accepted / total_processed) * 100
+        if games_bet > 0:
+            accuracy = (correct_bets / games_bet) * 100
+            real_baseline = (home_wins_in_bets / games_bet) * 100
             real_lift = accuracy - real_baseline
             
-            print(f" 🏠 BASELINE REAL (Submuestra): {real_baseline:.2f}%")
+            print(f" 💰 JUEGOS OPERADOS (Actionable): {games_bet}")
+            print(f" 🎯 ACCURACY EN APUESTAS: {accuracy:.2f}% ({correct_bets}/{games_bet})")
+            print(f" 🏠 BASELINE EN APUESTAS: {real_baseline:.2f}%")
             print(f" 🚀 LIFT REAL DEL MODELO: {real_lift:+.2f}%")
             
             print("-" * 50)
             if real_lift > 0:
-                print(" ✅ SEÑAL DIRECCIONAL CONFIRMADA: El modelo vence la inercia del mercado.")
+                print(" ✅ SEÑAL ALPHA CONFIRMADA: El modelo extrae valor real en su zona de confianza.")
             else:
-                print(" ⚠️ ALERTA: El modelo no supera la heurística de 'apostar siempre al local'.")
+                print(" ⚠️ ALERTA: Aún filtrando, el modelo no supera la varianza del mercado.")
         else:
-            print(" No hubo juegos aceptados para evaluar.")
+            print(" 📉 El filtro es muy estricto. El modelo no encontró ninguna oportunidad operable.")
     else:
-        print(" No se procesó ningún juego en este periodo.")
+        print(" No se procesó ningún juego.")
 
 if __name__ == "__main__":
     run_backtest()

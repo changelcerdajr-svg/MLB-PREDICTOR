@@ -1,42 +1,23 @@
 # market_scraper.py
-# Scraper Institucional V12.3 - Captura de Momios en Vivo (ESPN)
+# Scraper Institucional V12.4 - Con Radar de Diagnóstico
 
 import requests
 import streamlit as st
 
-# Diccionario de traducción: ESPN a veces usa nombres cortos o variaciones
+# Diccionario para atrapar variaciones raras de nombres
 TEAM_TRANSLATOR = {
-    "ny yankees": "new york yankees",
-    "ny mets": "new york mets",
-    "la dodgers": "los angeles dodgers",
-    "la angels": "los angeles angels",
-    "chi cubs": "chicago cubs",
-    "chi white sox": "chicago white sox",
-    "tb rays": "tampa bay rays",
-    "wsh nationals": "washington nationals",
-    "sf giants": "san francisco giants",
-    "sd padres": "san diego padres",
-    "stl cardinals": "st. louis cardinals",
-    "kc royals": "kansas city royals",
-    "az diamondbacks": "arizona diamondbacks",
-    "tex rangers": "texas rangers",
-    "sea mariners": "seattle mariners",
-    "col rockies": "colorado rockies",
-    "atl braves": "atlanta braves",
-    "bal orioles": "baltimore orioles"
+    "d-backs": "arizona diamondbacks",
+    "diamondbacks": "arizona diamondbacks",
+    "yanks": "new york yankees",
+    "sox": "boston red sox",
+    "white sox": "chicago white sox",
+    "cubbies": "chicago cubs"
 }
 
-@st.cache_data(ttl=120) # Actualizamos cada 2 minutos en lugar de 5
+@st.cache_data(ttl=120)
 def get_live_market_odds():
-    """
-    Intercepta las líneas de cierre en vivo desde la API pública de ESPN.
-    Clasifica estrictamente por Equipo Local para sincronizar con la app.
-    """
     url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-    
+    headers = {'User-Agent': 'Mozilla/5.0'}
     odds_dict = {}
     
     try:
@@ -45,39 +26,44 @@ def get_live_market_odds():
             return odds_dict
             
         data = response.json()
+        juegos_totales = len(data.get('events', []))
+        juegos_con_momios = 0
         
         for event in data.get('events', []):
             comp = event['competitions'][0]
             
             home_name_raw = ""
-            away_name_raw = ""
-            
-            # 1. Búsqueda estricta de local vs visitante
             for competitor in comp.get('competitors', []):
-                team_name = competitor['team']['displayName'].lower()
                 if competitor.get('homeAway') == 'home':
-                    home_name_raw = team_name
-                else:
-                    away_name_raw = team_name
+                    home_name_raw = competitor['team']['displayName'].lower()
             
-            # 2. Traducción al formato oficial MLB
             official_home = TEAM_TRANSLATOR.get(home_name_raw, home_name_raw)
             
-            # 3. Extracción de Líneas
+            # Buscamos la etiqueta de apuestas
             if 'odds' in comp and len(comp['odds']) > 0:
                 odds = comp['odds'][0]
                 home_ml = odds.get('homeTeamOdds', {}).get('moneyLine')
                 away_ml = odds.get('awayTeamOdds', {}).get('moneyLine')
                 
-                # ESPN a veces manda las líneas cerradas (None) o en otro formato si el juego ya empezó
                 if home_ml is not None and away_ml is not None:
-                    # Indexamos usando el equipo LOCAL
                     odds_dict[official_home] = {
                         'home_ml': int(home_ml),
                         'away_ml': int(away_ml)
                     }
-                    
+                    juegos_con_momios += 1
+        
+        # Reporte de diagnóstico en la interfaz
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### Radar de Mercado ESPN")
+        st.sidebar.write(f"Juegos detectados hoy: {juegos_totales}")
+        
+        if juegos_con_momios == 0:
+            st.sidebar.warning("Aviso: ESPN no está reportando líneas de dinero en este momento. Ingresa los momios manualmente.")
+        else:
+            st.sidebar.success(f"Líneas capturadas exitosamente: {juegos_con_momios}")
+            
         return odds_dict
+        
     except Exception as e:
-        # st.sidebar.error(f"Error interno del Scraper: {e}") # Descomenta para debugguear
+        st.sidebar.error("Fallo de conexión con el servidor de ESPN.")
         return {}

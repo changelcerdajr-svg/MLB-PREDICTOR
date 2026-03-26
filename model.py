@@ -1,5 +1,6 @@
 # model.py
 # Orquestador V12.1 (Con Análisis de Sensibilidad de Inputs)
+from config import SIMULATION_ROUNDS, STRESS_TEST_ROUNDS
 import pickle
 import os
 from data_loader import MLBDataLoader
@@ -34,12 +35,14 @@ class MLBPredictor:
         if abs(h_pstats['fip'] - 4.30) < 0.001 or abs(a_pstats['fip'] - 4.30) < 0.001:
             return {'error': 'Datos de pitcheo insuficientes o Opener detectado. Simulación abortada.'}
 
-        # 3. Lineups
+        # 3. Lineups (Compuerta Estricta V12.2)
         h_ops, h_confirmed = self.loader.get_confirmed_lineup_ops(game['id'], 'home')
         a_ops, a_confirmed = self.loader.get_confirmed_lineup_ops(game['id'], 'away')
         
-        if h_ops is None: h_ops = 0.720 
-        if a_ops is None: a_ops = 0.720
+        # SESGO DE DOMINIO RESUELTO: Si no hay lineups, abortamos.
+        # No entrenamos ni predecimos con medias ligueras planas (0.720).
+        if not h_confirmed or not a_confirmed:
+            return {'error': 'Lineups no confirmados. Operación bloqueada para evitar sesgo de dominio.'}
 
         # 4. Defensa General y Fatiga
         h_fatigue = self.loader.get_bullpen_fatigue(game['home_id'], game['date'])
@@ -61,23 +64,20 @@ class MLBPredictor:
         win_prob, h_runs, a_runs, _ = self.engine.run_monte_carlo_simulation(
             h_pow=h_power, h_def=h_def_ra9, 
             a_pow=a_power, a_def=a_def_ra9, 
-            rounds=10000, league_avg_runs=league_avg_runs, pf=pf
+            rounds=SIMULATION_ROUNDS, league_avg_runs=league_avg_runs, pf=pf
         )
 
-        # --- 6.5 ANÁLISIS DE SENSIBILIDAD (STRESS TEST) ---
-        # Alteramos el OPS un ±5% para ver qué tan frágil es la predicción
+        # --- 6.5 ANÁLISIS DE SENSIBILIDAD ---
         delta_h = h_ops * 0.05
         delta_a = a_ops * 0.05
         
-        # Escenario A: Local rinde 5% mejor, Visitante 5% peor
         h_pow_high = self.engine.calculate_power_score(h_ops + delta_h, pf, league_avg_runs, game['home_id'], game['date'], schedule_df)
         a_pow_low = self.engine.calculate_power_score(a_ops - delta_a, pf, league_avg_runs, game['away_id'], game['date'], schedule_df)
-        prob_high, _, _, _ = self.engine.run_monte_carlo_simulation(h_pow_high, h_def_ra9, a_pow_low, a_def_ra9, 2000, league_avg_runs, pf)
+        prob_high, _, _, _ = self.engine.run_monte_carlo_simulation(h_pow_high, h_def_ra9, a_pow_low, a_def_ra9, STRESS_TEST_ROUNDS, league_avg_runs, pf)
         
-        # Escenario B: Local rinde 5% peor, Visitante 5% mejor
         h_pow_low = self.engine.calculate_power_score(h_ops - delta_h, pf, league_avg_runs, game['home_id'], game['date'], schedule_df)
         a_pow_high = self.engine.calculate_power_score(a_ops + delta_a, pf, league_avg_runs, game['away_id'], game['date'], schedule_df)
-        prob_low, _, _, _ = self.engine.run_monte_carlo_simulation(h_pow_low, h_def_ra9, a_pow_high, a_def_ra9, 2000, league_avg_runs, pf)
+        prob_low, _, _, _ = self.engine.run_monte_carlo_simulation(h_pow_low, h_def_ra9, a_pow_high, a_def_ra9, STRESS_TEST_ROUNDS, league_avg_runs, pf)
         
         # La sensibilidad real: cuánto osciló la probabilidad con este cambio de inputs
         input_sensitivity = abs(prob_high - prob_low) / 2

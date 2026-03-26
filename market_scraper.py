@@ -1,69 +1,91 @@
 # market_scraper.py
-# Scraper Institucional V12.4 - Con Radar de Diagnóstico
+# Scraper Institucional V13.0 - Integración Directa con The Odds API
 
 import requests
 import streamlit as st
 
-# Diccionario para atrapar variaciones raras de nombres
+# INSERTA TU LLAVE AQUÍ
+API_KEY = "0b67fd82591c01def9fa987b4d827f04"
+
+# The Odds API ya entrega los nombres casi perfectos, 
+# pero mantenemos un mini-diccionario por seguridad en variaciones mínimas.
 TEAM_TRANSLATOR = {
-    "d-backs": "arizona diamondbacks",
-    "diamondbacks": "arizona diamondbacks",
-    "yanks": "new york yankees",
-    "sox": "boston red sox",
-    "white sox": "chicago white sox",
-    "cubbies": "chicago cubs"
+    "chicago white sox": "chicago white sox",
+    "chicago cubs": "chicago cubs",
+    "new york yankees": "new york yankees",
+    "new york mets": "new york mets",
+    "los angeles dodgers": "los angeles dodgers",
+    "los angeles angels": "los angeles angels"
 }
 
 @st.cache_data(ttl=120)
 def get_live_market_odds():
-    url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    url = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/"
+    params = {
+        'apiKey': API_KEY,
+        'regions': 'us',
+        'markets': 'h2h', # Head to Head (Moneyline)
+        'oddsFormat': 'american'
+    }
+    
     odds_dict = {}
     
     try:
-        response = requests.get(url, headers=headers, timeout=5)
+        response = requests.get(url, params=params, timeout=10)
+        
         if response.status_code != 200:
+            st.sidebar.error(f"Error de conexión: Código {response.status_code}")
             return odds_dict
             
         data = response.json()
-        juegos_totales = len(data.get('events', []))
+        juegos_totales = len(data)
         juegos_con_momios = 0
         
-        for event in data.get('events', []):
-            comp = event['competitions'][0]
+        for game in data:
+            home_team = game.get('home_team', '').lower()
+            away_team = game.get('away_team', '').lower()
             
-            home_name_raw = ""
-            for competitor in comp.get('competitors', []):
-                if competitor.get('homeAway') == 'home':
-                    home_name_raw = competitor['team']['displayName'].lower()
+            official_home = TEAM_TRANSLATOR.get(home_team, home_team)
             
-            official_home = TEAM_TRANSLATOR.get(home_name_raw, home_name_raw)
-            
-            # Buscamos la etiqueta de apuestas
-            if 'odds' in comp and len(comp['odds']) > 0:
-                odds = comp['odds'][0]
-                home_ml = odds.get('homeTeamOdds', {}).get('moneyLine')
-                away_ml = odds.get('awayTeamOdds', {}).get('moneyLine')
+            # Buscamos la primera casa de apuestas disponible (ej. DraftKings, FanDuel)
+            if 'bookmakers' in game and len(game['bookmakers']) > 0:
+                # Tomamos la primera casa para la línea de consenso
+                bookmaker = game['bookmakers'][0] 
                 
-                if home_ml is not None and away_ml is not None:
-                    odds_dict[official_home] = {
-                        'home_ml': int(home_ml),
-                        'away_ml': int(away_ml)
-                    }
-                    juegos_con_momios += 1
-        
-        # Reporte de diagnóstico en la interfaz
+                if 'markets' in bookmaker and len(bookmaker['markets']) > 0:
+                    outcomes = bookmaker['markets'][0].get('outcomes', [])
+                    
+                    home_ml = None
+                    away_ml = None
+                    
+                    for outcome in outcomes:
+                        team_name = outcome.get('name', '').lower()
+                        price = outcome.get('price')
+                        
+                        if team_name == home_team:
+                            home_ml = price
+                        elif team_name == away_team:
+                            away_ml = price
+                            
+                    if home_ml is not None and away_ml is not None:
+                        odds_dict[official_home] = {
+                            'home_ml': int(home_ml),
+                            'away_ml': int(away_ml)
+                        }
+                        juegos_con_momios += 1
+
+        # Panel de Diagnóstico en la Interfaz
         st.sidebar.markdown("---")
-        st.sidebar.markdown("### Radar de Mercado ESPN")
-        st.sidebar.write(f"Juegos detectados hoy: {juegos_totales}")
+        st.sidebar.markdown("### Radar de Mercado (The Odds API)")
+        st.sidebar.write(f"Juegos en pizarra: {juegos_totales}")
         
         if juegos_con_momios == 0:
-            st.sidebar.warning("Aviso: ESPN no está reportando líneas de dinero en este momento. Ingresa los momios manualmente.")
+            st.sidebar.warning("Las casas de apuestas aún no publican líneas de dinero para hoy.")
         else:
-            st.sidebar.success(f"Líneas capturadas exitosamente: {juegos_con_momios}")
+            st.sidebar.success(f"Líneas extraídas de Las Vegas: {juegos_con_momios}")
             
         return odds_dict
-        
+
     except Exception as e:
-        st.sidebar.error("Fallo de conexión con el servidor de ESPN.")
+        st.sidebar.error("Fallo crítico en el motor de extracción de momios.")
         return {}

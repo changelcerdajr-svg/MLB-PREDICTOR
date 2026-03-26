@@ -1,6 +1,7 @@
 # app.py
-# MLB Quant Engine - Web Interface V12.2
+# MLB Quant Engine - Web Interface V12.3
 import streamlit as st
+import datetime
 from market_scraper import get_live_market_odds
 from model import MLBPredictor
 from financial import american_to_prob, remove_vig, calculate_edge
@@ -13,32 +14,46 @@ st.set_page_config(page_title="MLB Quant Engine", page_icon="⚾", layout="wide"
 def load_predictor():
     return MLBPredictor()
 
-st.title("🏛️ MLB Quant Engine V12.2")
+st.title("🏛️ MLB Quant Engine V12.3")
 st.markdown("**Core Estocástico:** NegBinomial (VMR=1.8 Empírico) | **Riesgo:** Kelly Fraccionario")
 st.divider()
 
 predictor = load_predictor()
 
+# --- SELECTOR DE FECHA (NUEVO) ---
+st.sidebar.header("📅 Control de Tiempo")
+today = datetime.date.today()
+
+# Permite navegar 7 días al pasado y 7 días al futuro
+selected_date = st.sidebar.date_input(
+    "Selecciona la fecha de operación:",
+    today,
+    min_value=today - datetime.timedelta(days=7),
+    max_value=today + datetime.timedelta(days=7)
+)
+date_str = selected_date.strftime("%Y-%m-%d")
+
 # --- CARGA DE JUEGOS ---
-with st.spinner('Extrayendo calendario y variables...'):
+with st.spinner(f'Extrayendo calendario y variables para {date_str}...'):
     try:
-        games = predictor.get_todays_games()
+        # Usamos el loader directo para inyectarle la fecha que elegimos
+        games = predictor.loader.get_schedule(date_str)
     except Exception as e:
         st.error(f"Error de conexión con MLB API: {e}")
         games = []
 
 if not games:
-    st.warning("No hay juegos programados para hoy.")
+    st.warning(f"No hay juegos programados para el {date_str}.")
 else:
     # --- BARRA LATERAL (SIDEBAR) ---
-    st.sidebar.header("Pizarra del Día")
+    st.sidebar.header("Pizarra de Juegos")
     
     game_options = {f"{g['away_name']} @ {g['home_name']}": g for g in games}
     selected_game_str = st.sidebar.selectbox("Selecciona un juego para auditar:", list(game_options.keys()))
     selected_game = game_options[selected_game_str]
     
     st.sidebar.divider()
-    st.sidebar.info("La simulación ejecuta iteraciones estocásticas para medir la varianza exacta del encuentro.")
+    st.sidebar.info("Nota: Los juegos del futuro sin lineups confirmados bloquearán la predicción por seguridad, pero mostrarán el análisis base.")
 
     # --- MOTOR PREDICTIVO (PANEL CENTRAL) ---
     st.subheader(f"🏟️ Análisis: {selected_game['away_name']} vs {selected_game['home_name']}")

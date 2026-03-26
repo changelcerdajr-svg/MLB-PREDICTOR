@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import sys
 
 # CONFIGURACIÓN
-START_DATE = "2025-06-01" 
+START_DATE = "2024-07-01" 
 GAMES_TO_AUDIT = 600      
 
 def run_calibration():

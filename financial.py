@@ -13,10 +13,12 @@ def american_to_prob(odds: int) -> float:
     else:
         return abs(odds) / (abs(odds) + 100)
 
+from scipy.optimize import brentq
+
 def remove_vig(prob_home: float, prob_away: float) -> tuple:
     """
-    Elimina el margen del casino usando una aproximación del Power Method.
-    Evita inflar artificialmente las probabilidades de los underdogs.
+    Elimina el margen del casino usando el Power Method de Shin optimizado.
+    Calcula la probabilidad real (sin vig) respetando la asimetría del mercado.
     """
     if prob_home == 0 or prob_away == 0:
         return 0.0, 0.0
@@ -24,18 +26,26 @@ def remove_vig(prob_home: float, prob_away: float) -> tuple:
     total_implied = prob_home + prob_away
     margin = total_implied - 1.0
     
-    if margin <= 0:
-        return prob_home, prob_away # No hay vig (raro, pero posible en exchanges)
+    if margin <= 0.001:
+        return prob_home, prob_away
         
-    # Power Method Aproximado: 
-    # Descontamos el vig proporcionalmente al logaritmo de la probabilidad,
-    # lo que castiga más al underdog (que es donde las casas esconden su mayor margen).
-    
-    # Exponente empírico para balancear el margen
-    k = 1.0 - (margin / 2) 
-    
-    p_home_clean = (prob_home ** k) / ((prob_home ** k) + (prob_away ** k))
-    p_away_clean = (prob_away ** k) / ((prob_home ** k) + (prob_away ** k))
+    # Función objetivo para el optimizador matemático
+    def objective(k):
+        p1 = (prob_home ** k) / ((prob_home ** k) + (prob_away ** k))
+        p2 = (prob_away ** k) / ((prob_home ** k) + (prob_away ** k))
+        return p1 + p2 - 1.0
+        
+    try:
+        # Brentq busca el exponente k exacto donde las probabilidades sumen 1.0
+        # Buscamos en el rango seguro de 0.1 a 10.0
+        k_opt = brentq(objective, 0.1, 10.0)
+    except ValueError:
+        # Si la optimización falla por valores extremos, usamos proporción simple
+        return prob_home / total_implied, prob_away / total_implied
+
+    # Calculamos la probabilidad limpia final con el exponente encontrado
+    p_home_clean = (prob_home ** k_opt) / ((prob_home ** k_opt) + (prob_away ** k_opt))
+    p_away_clean = (prob_away ** k_opt) / ((prob_home ** k_opt) + (prob_away ** k_opt))
     
     return p_home_clean, p_away_clean
 

@@ -1,0 +1,32 @@
+name: MLB Statcast Auto-Update
+
+on:
+  schedule:
+    - cron: '0 12 * * *'  # Se ejecuta todos los días a las 12:00 UTC (mañana de México)
+  workflow_dispatch:      # Permite que tú lo actives manualmente con un botón
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependencias
+        run: pip install pandas requests
+
+      - name: Ejecutar Scraper Statcast
+        run: python statcast_scraper.py
+
+      - name: Guardar cambios en GitHub
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data_statcast/*.csv
+          git commit -m "Actualización diaria automática de radares Statcast" || echo "Sin cambios"
+          git push

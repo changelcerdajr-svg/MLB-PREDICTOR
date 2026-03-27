@@ -1,5 +1,5 @@
 # app.py
-# MLB Quant Engine - Web Interface V15.3 (Full theScore UI + Tracker)
+# MLB Quant Engine - Web Interface V15.4 (Con Monitor de Efectividad Diaria)
 
 import streamlit as st
 import datetime
@@ -14,39 +14,24 @@ st.set_page_config(page_title="MLB Quant Engine", page_icon="⚾", layout="wide"
 # --- CSS PERSONALIZADO (Estilo theScore) ---
 st.markdown("""
 <style>
-    /* Fondos y Tarjetas */
     .card-deportiva { background-color: #1C1C1E; padding: 18px; border-radius: 16px; border: 1px solid #2C2C2E; height: 100%; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
-    
-    /* Badges (Etiquetas) */
     .badge-blue { background-color: #0066FF; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
     .badge-green { background-color: #19B664; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
     .badge-red { background-color: #FF3333; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
     .badge-amber { background-color: #F5A623; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
     .badge-gray { background-color: #2C2C2E; color: #E5E5EA; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
-    
-    /* Contenedores de Valor Esperado */
     .ev-container-positive { border-left: 6px solid #19B664; background-color: #14221A; padding: 20px; border-radius: 0 16px 16px 0; margin-top: 15px; }
     .ev-container-neutral { border-left: 6px solid #2C2C2E; background-color: #1C1C1E; padding: 20px; border-radius: 0 16px 16px 0; margin-top: 15px; }
-    
-    /* Botón de Acción Principal */
     .action-bar { background-color: #0066FF; color: white; padding: 18px; border-radius: 14px; text-align: center; font-size: 1.15em; font-weight: 900; margin-top: 20px; box-shadow: 0 4px 15px rgba(0, 102, 255, 0.35); letter-spacing: 0.5px;}
-    
-    /* Tipografía de Métricas */
     .metric-blue { color: #337AEE; font-size: 2.6em; font-weight: 900; line-height: 1.1; }
     .metric-green { color: #19B664; font-size: 2.6em; font-weight: 900; line-height: 1.1; }
     .metric-amber { color: #F5A623; font-size: 2.6em; font-weight: 900; line-height: 1.1; }
-    
-    /* Barra de Probabilidad */
     .prob-bar-bg { background-color: #2C2C2E; border-radius: 6px; width: 100%; height: 10px; margin-top: 12px; overflow: hidden; }
     .prob-bar-fill { background-color: #0066FF; height: 100%; border-radius: 6px; }
-    
-    /* Puntos de Estatus */
     .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
     .dot-live { background-color: #FF3333; box-shadow: 0 0 8px rgba(255,51,51,0.8); }
     .dot-final { background-color: #19B664; }
     .dot-sched { background-color: #8E8E93; }
-    
-    /* Divisores y Títulos */
     hr.section-divider { border-top: 1px solid #2C2C2E; margin: 35px 0 20px 0; }
     .section-title { color: #8E8E93; font-size: 0.85em; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 18px; }
 </style>
@@ -57,6 +42,20 @@ def load_predictor():
     return MLBPredictor()
 
 predictor = load_predictor()
+
+# --- CACHÉ DE EFECTIVIDAD DIARIA (Actualiza cada 5 mins para no trabar la app) ---
+@st.cache_data(ttl=300)
+def get_daily_accuracy(date_str, _games_list, _predictor_obj):
+    finished = [g for g in _games_list if g.get('status', '') in ['Final', 'Game Over', 'Completed', 'F']]
+    correct = 0
+    evaluated = 0
+    for fg in finished:
+        res = _predictor_obj.predict_game(fg)
+        if 'error' not in res:
+            evaluated += 1
+            if res['winner'] == fg['real_winner']:
+                correct += 1
+    return correct, evaluated, len(finished)
 
 # --- SELECTOR DE FECHA ---
 st.sidebar.markdown("<div class='section-title'>Control de Tiempo</div>", unsafe_allow_html=True)
@@ -88,14 +87,33 @@ st.sidebar.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- CARGA DE JUEGOS ---
-st.sidebar.markdown("<br><div class='section-title'>Pizarra de Juegos</div>", unsafe_allow_html=True)
-with st.spinner(f'Extrayendo pizarra...'):
+with st.spinner(f'Extrayendo pizarra de {date_str}...'):
     try: games = predictor.loader.get_schedule(date_str)
     except: games = []
 
-if not games:
-    st.warning(f"No hay juegos programados para el {date_str}.")
+# --- NUEVO: MONITOR DE JORNADA ---
+st.sidebar.markdown("<br><div class='section-title'>Monitor de Jornada (Global)</div>", unsafe_allow_html=True)
+if games:
+    correct_preds, evaluated_games, finished_count = get_daily_accuracy(date_str, games, predictor)
+    
+    if evaluated_games > 0:
+        win_pct = (correct_preds / evaluated_games) * 100
+        color_acc = "#19B664" if win_pct >= 53 else "#F5A623" if win_pct >= 50 else "#FF3333"
+        st.sidebar.markdown(f"""
+        <div style='background-color:#1C1C1E; padding:15px; border-radius:12px; border:1px solid #2C2C2E; text-align:center;'>
+            <div style='color:#8E8E93; font-size:0.85em; font-weight:bold; text-transform:uppercase;'>Aciertos del Modelo (Hoy)</div>
+            <div style='font-size:2.2em; font-weight:900; color:{color_acc};'>{correct_preds} <span style='color:#8E8E93; font-size:0.5em;'>de</span> {evaluated_games}</div>
+            <div style='color:#E5E5EA; font-size:0.95em; font-weight:bold;'>Efectividad: {win_pct:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.sidebar.markdown("<div style='color:#8E8E93; font-size:0.85em; font-style:italic; text-align:center;'>Esperando a que finalicen los primeros juegos de hoy...</div>", unsafe_allow_html=True)
 else:
+    st.sidebar.warning(f"No hay juegos para el {date_str}.")
+
+# --- PIZARRA DE JUEGOS (TARJETAS) ---
+st.sidebar.markdown("<br><div class='section-title'>Pizarra de Juegos</div>", unsafe_allow_html=True)
+if games:
     if 'selected_game_id' not in st.session_state or st.session_state.get('last_date') != date_str:
         st.session_state.selected_game_id = games[0]['id']
         st.session_state.last_date = date_str
@@ -233,7 +251,7 @@ else:
             </div>
             """, unsafe_allow_html=True)
             
-            st.write("") # Espaciador
+            st.write("") 
             if st.button("💾 Guardar Predicción en Bitácora", use_container_width=True):
                 guardado = tracker.log_bet(date_str, f"{away} @ {home}", target_team, fav_prob, target_ml, calc['edge_pct'])
                 if guardado:
@@ -241,7 +259,7 @@ else:
                 else:
                     st.warning("Este juego ya estaba guardado en tu bitácora de hoy.")
 
-        # BLOQUE 3: ESTRUCTURA (RESTAURADO)
+        # BLOQUE 3: ESTRUCTURA
         st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
         cf1, cf2 = st.columns(2)
         with cf1:
@@ -268,7 +286,7 @@ else:
             """, unsafe_allow_html=True)
 
         # --- SECCIÓN DEL TRACK RECORD (ESTADÍSTICAS) ---
-        st.markdown("<hr class='section-divider'><div class='section-title'>📊 Tu Récord Histórico</div>", unsafe_allow_html=True)
+        st.markdown("<hr class='section-divider'><div class='section-title'>📊 Tu Récord Histórico de Operaciones</div>", unsafe_allow_html=True)
         
         df_log = tracker.load_tracker()
         

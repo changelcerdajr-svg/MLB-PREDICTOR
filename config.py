@@ -10,20 +10,41 @@ SIMULATION_ROUNDS = 10000     # Optimizado (Reemplaza los 100k innecesarios)
 STRESS_TEST_ROUNDS = 2000     # Para el cálculo de Sensibilidad
 
 # 3. FACTORES DE PARQUE (30 Equipos MLB - Carreras Totales)
-# Factores de Estadio Reales (Park Factors 2024)
+# Factores de Estadio Reales (Park Factors 2024 - Base Histórica)
 # > 1.00 = Favorece Carreras | < 1.00 = Favorece Pitcheo
+# IDs Verificados con la API de Stats de MLB
 PARK_FACTORS = {
     'runs': {
-        19: 1.35, # Coors Field (COL) - El más extremo
-        18: 1.12, # Great American Ball Park (CIN)
-        32: 1.05, # Yankee Stadium (NYY)
-        17: 1.04, # Wrigley Field (CHC)
-        9:  1.02, # Fenway Park (BOS)
-        10: 0.98, # Rogers Centre (TOR)
-        31: 0.96, # Citi Field (NYM)
-        24: 0.94, # Oracle Park (SF)
-        11: 0.91, # T-Mobile Park (SEA) - El más difícil para batear
-        3:  0.89, # Tropicana Field (TB)
+        19: 1.35,  # Coors Field (COL) - El más extremo
+        18: 1.12,  # Great American Ball Park (CIN)
+        9:  1.08,  # Fenway Park (BOS)
+        7:  1.06,  # Kauffman Stadium (KC)
+        12: 1.05,  # Guaranteed Rate Field (CWS)
+        33: 1.05,  # Yankee Stadium (NYY) - *Nota: ID API es 33 (antes 32 en algunas docs)
+        16: 1.04,  # Truist Park (ATL)
+        17: 1.04,  # Wrigley Field (CHC)
+        22: 1.04,  # Dodger Stadium (LAD)
+        4:  1.03,  # PNC Park (PIT)
+        11: 1.02,  # T-Mobile Park (SEA)
+        25: 1.02,  # Busch Stadium (STL)
+        28: 1.02,  # Globe Life Field (TEX)
+        21: 1.01,  # Citizens Bank Park (PHI)
+        2:  1.00,  # Oriole Park (BAL) - Neutro post-muro
+        1:  1.00,  # Angel Stadium (LAA)
+        5:  1.00,  # Progressive Field (CLE)
+        14: 1.00,  # Oakland Coliseum (OAK) - *Temporal hasta Las Vegas
+        15: 1.00,  # Chase Field (ARI)
+        26: 1.00,  # Tropicana Field (TB)
+        29: 1.00,  # Nationals Park (WSH)
+        3:  0.99,  # Target Field (MIN)
+        6:  0.99,  # Comerica Park (DET)
+        23: 0.98,  # loanDepot park (MIA)
+        10: 0.98,  # Rogers Centre (TOR)
+        27: 0.98,  # Oracle Park (SF)
+        31: 0.96,  # Citi Field (NYM)
+        24: 0.95,  # Minute Maid Park (HOU)
+        32: 0.94,  # American Family Field (MIL)
+        30: 0.92   # Petco Park (SD) - El más hostil para bateadores
     }
 }
 

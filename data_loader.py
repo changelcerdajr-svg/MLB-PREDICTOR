@@ -10,11 +10,18 @@ from config import API_URL, USER_AGENT, USE_REAL_TIME, TEST_DATE, STADIUM_COORDS
 # Importamos nuestro nuevo motor de extracción
 from statcast_scraper import StatcastScraper
 
-# CONSTANTES DE ESTABILIZACIÓN STATCAST (Ventaja Institucional Restaurada)
-K_BATTER_XWOBA = 50  # El radar estabiliza el contacto en 50 turnos
-K_PITCHER_XERA = 30  # El radar estabiliza la calidad de lanzamientos en 30 innings
-LEAGUE_AVG_XWOBA = 0.315
-LEAGUE_AVG_XERA = 4.00
+# =====================================================================
+# CONSTANTES DE ESTABILIZACIÓN STATCAST (Bayesian Shrinkage)
+# Decisión Arquitectónica V17.1: Se utiliza Shrinkage basado en Volumen 
+# (Método Tom Tango) en lugar de Time-Decay (EMA). Las métricas 'Expected' 
+# (xwOBA/xERA) son resistentes a rachas, por lo que el volumen de muestra 
+# es mejor predictor del talento real que la recencia cronológica.
+# =====================================================================
+K_BATTER_XWOBA = 50  # Punto de estabilización de contacto (Aprox 50 PA)
+K_PITCHER_XERA = 30  # Punto de estabilización de pitcheo (Aprox 30 IP)
+LEAGUE_AVG_XWOBA = 0.315 # Baseline histórico
+LEAGUE_AVG_XERA = 4.00   # Baseline histórico
+# =====================================================================
 
 class MLBDataLoader:
     def __init__(self):
@@ -35,35 +42,52 @@ class MLBDataLoader:
             return r.json()
         except: return None
 
-    def get_schedule(self, specific_date=None):
-        date_str = specific_date if specific_date else (datetime.date.today().strftime("%Y-%m-%d") if USE_REAL_TIME else TEST_DATE)
-        self.current_season_year = int(date_str[:4]) 
+    def get_schedule(self, date_str):
+        """Obtiene el calendario de juegos de la API de MLB para una fecha dada."""
+        self.current_season_year = int(date_str[:4]) # Línea restaurada
         
-        data = self._get("schedule", {'sportId': 1, 'date': date_str, 'hydrate': 'team,probablePitcher,venue'})
+        params = {'sportId': 1, 'date': date_str, 'hydrate': 'lineups,probablePitcher,team'}
+        data = self._get("schedule", params)
+        games_list = []
         
-        valid = []
-        if data and 'dates' in data and len(data['dates']) > 0:
-            for g in data['dates'][0]['games']:
-                if g.get('gameType') not in ['R', 'P', 'F', 'D', 'L', 'W']: continue
-                
-                away_score = g['teams']['away'].get('score', 0)
-                home_score = g['teams']['home'].get('score', 0)
-                status = g['status']['abstractGameState']
+        if not data or 'dates' not in data or not data['dates']:
+            return []
+            
+        for date_item in data['dates']:
+            for g in date_item['games']:
+                try:
+                    # Filtramos solo juegos de temporada regular o playoffs
+                    if g.get('gameType') not in ['R', 'P', 'F', 'D', 'L', 'W']:
+                        continue
+                        
+                    h_pitcher = g['teams']['home'].get('probablePitcher', {}).get('id')
+                    a_pitcher = g['teams']['away'].get('probablePitcher', {}).get('id')
+                    
+                    if not h_pitcher or not a_pitcher: continue
 
-                valid.append({
-                    'id': g['gamePk'], 'date': date_str,
-                    'status': status,
-                    'real_score': {'away': away_score, 'home': home_score},
-                    'real_winner': g['teams']['home']['team']['name'] if home_score > away_score else g['teams']['away']['team']['name'],
-                    'away_id': g['teams']['away']['team']['id'],
-                    'home_id': g['teams']['home']['team']['id'],
-                    'away_name': g['teams']['away']['team']['name'],
-                    'home_name': g['teams']['home']['team']['name'],
-                    'venue_id': g['venue']['id'],
-                    'away_pitcher': g['teams']['away'].get('probablePitcher', {}).get('id'),
-                    'home_pitcher': g['teams']['home'].get('probablePitcher', {}).get('id')
-                })
-        return valid
+                    game_info = {
+                        'id': g['gamePk'],
+                        'date': date_str,
+                        'status': g['status']['abstractGameState'],
+                        'venue_id': g['venue']['id'],
+                        'home_id': g['teams']['home']['team']['id'],
+                        'home_name': g['teams']['home']['team']['teamName'],
+                        'home_pitcher': h_pitcher,
+                        'away_id': g['teams']['away']['team']['id'],
+                        'away_name': g['teams']['away']['team']['teamName'],
+                        'away_pitcher': a_pitcher,
+                        'real_winner': None
+                    }
+
+                    if game_info['status'] == 'Final':
+                        h_score = g['teams']['home'].get('score', 0)
+                        a_score = g['teams']['away'].get('score', 0)
+                        game_info['real_winner'] = game_info['home_name'] if h_score > a_score else game_info['away_name']
+
+                    games_list.append(game_info)
+                except Exception as e:
+                    continue
+        return games_list
 
     def get_league_run_environment(self, date_str):
         try:
@@ -136,37 +160,35 @@ class MLBDataLoader:
         self.player_history_cache[cache_key] = default
         return default
 
-    def get_pitcher_xera_stats(self, pid):
-        stats = {'era': 4.50, 'xera': LEAGUE_AVG_XERA, 'k9': 7.5} 
-        if not pid: return stats
-        try:
-            # 1. Obtenemos datos de volumen (Innings y Ponches) de MLB API
-            d = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': 'pitching'})
-            current_ip = 0.0
-            current_era = 4.50
-            current_k9 = 7.5
-
-            if d and 'stats' in d and d['stats'] and d['stats'][0].get('splits'):
-                s = d['stats'][0]['splits'][0]['stat']
+    def get_pitcher_xera_stats(self, player_id, year=None):
+        if year is None:
+            year = getattr(self, 'current_season_year', datetime.date.today().year)
+            
+        raw_xera = self.savant.get_pitcher_xera(player_id, year)
+        if raw_xera is None:
+            raw_xera = self.savant.get_pitcher_xera(player_id, year - 1)
+            
+        # Obtener IP (Innings Pitched) para shrinkage y el K9 real
+        ip_data = self._get(f"people/{player_id}/stats", {'stats': 'season', 'group': 'pitching'})
+        current_ip = 0.0
+        current_k9 = 7.5 # Promedio por defecto
+        
+        if ip_data and 'stats' in ip_data and ip_data['stats']:
+            splits = ip_data['stats'][0].get('splits', [])
+            if splits:
+                s = splits[0]['stat']
                 current_ip = float(s.get('inningsPitched', 0.0))
-                current_era = float(s.get('era', 4.50))
                 current_k9 = float(s.get('strikeoutsPer9Inn', 7.5))
+                
+        # Aplicamos el Shrinkage usando los innings reales
+        base_xera = raw_xera if raw_xera is not None else LEAGUE_AVG_XERA
+        
+        if current_ip > 0:
+            final_xera = (K_PITCHER_XERA * LEAGUE_AVG_XERA + base_xera * current_ip) / (K_PITCHER_XERA + current_ip)
+        else:
+            final_xera = base_xera
             
-            # 2. Obtenemos el xERA real de Baseball Savant
-            savant_xera = self.savant.get_pitcher_xera(pid, self.current_season_year)
-            
-            if savant_xera is not None:
-                current_xera = savant_xera
-            else:
-                # Fallback a ERA si Savant no lo tiene aún
-                current_xera = current_era
-
-            # 3. Encogimiento Bayesiano
-            prior_xera = self._get_prior_stats(pid, 'pitching')
-            projected_xera = self._apply_bayesian_shrinkage(current_xera, current_ip, K_PITCHER_XERA, prior_xera)
-            stats = {'era': current_era, 'xera': projected_xera, 'k9': current_k9}
-        except: pass
-        return stats
+        return {'xera': final_xera, 'k9': current_k9}
 
     def get_confirmed_lineup_xwoba(self, game_pk, team_type):
         try:
@@ -222,7 +244,7 @@ class MLBDataLoader:
                     
             if total_weight > 0: 
                 lineup_variance = np.std(xwoba_values_list) if len(xwoba_values_list) > 0 else 0
-                cohesion_factor = 1.0 + ((0.08 - lineup_variance) * 0.5)
+                cohesion_factor = 1.0 + (0.05 * (0.04 - lineup_variance))
                 final_xwoba = (weighted_sum / total_weight) * cohesion_factor
                 return (final_xwoba, True)
         except Exception as e: 

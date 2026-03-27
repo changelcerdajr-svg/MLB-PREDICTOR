@@ -6,14 +6,21 @@ import pickle
 import os
 
 def train_isotonic_calibrator():
-    # CAMBIO CLAVE: Usamos una ventana real de la temporada 2025
-    # Agosto y Septiembre son los mejores meses para calibrar (datos más estables)
-    TRAIN_START = "2025-08-01"
-    TRAIN_END = "2025-09-15"
+    # Detectamos el año actual
+    current_year = datetime.now().year
     
-    print("="*60)
-    print(f"🛰️ CALIBRANDO MOTOR CON TEMPORADA 2025: {TRAIN_START} al {TRAIN_END}")
-    print("="*60)
+    # Si estamos en pre-temporada (antes de Abril), calibramos con el cierre del año pasado
+    if datetime.now().month < 4:
+        TRAIN_START = f"{current_year - 1}-08-15"
+        TRAIN_END = f"{current_year - 1}-09-30"
+    else:
+        # Si ya hay temporada, usamos los últimos 30 días
+        end_dt = datetime.now() - timedelta(days=1)
+        start_dt = end_dt - timedelta(days=30)
+        TRAIN_START = start_dt.strftime("%Y-%m-%d")
+        TRAIN_END = end_dt.strftime("%Y-%m-%d")
+
+    print(f"🛰️ CALIBRACIÓN AUTOMÁTICA: {TRAIN_START} al {TRAIN_END}")
     
     predictor = MLBPredictor(use_calibrator=False) 
     loader = predictor.loader

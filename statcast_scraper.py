@@ -67,14 +67,22 @@ class StatcastScraper:
     def get_pitcher_xera(self, player_id, year):
         if year not in self.pitchers_cache:
             file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
+            
+            if not os.path.exists(file_path):
+                self.fetch_pitchers(year)
+            
             if os.path.exists(file_path):
                 df = pd.read_csv(file_path)
-                possible_cols = ['xera', 'est_era', 'expected_era']
+                possible_cols = ['xera', 'est_era', 'expected_era', 'estimated_era']
                 target_col = next((c for c in possible_cols if c in df.columns), None)
-                if target_col:
+                
+                if target_col and 'player_id' in df.columns:
                     self.pitchers_cache[year] = df.set_index('player_id')[target_col].to_dict()
+                else:
+                    self.pitchers_cache[year] = {}
             else:
-                self.fetch_pitchers(year)
+                self.pitchers_cache[year] = {}
+
         return self.pitchers_cache.get(year, {}).get(player_id)
 
 if __name__ == "__main__":

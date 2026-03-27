@@ -16,6 +16,7 @@ def run_backtest(start_date_str, days=5):
     actionable_games = 0
     correct = 0
     units_won = 0.0
+    home_wins_in_bets = 0 # NUEVO CONTADOR
     
     print("="*60)
     print(f"INICIANDO BACKTEST V17.1: {start_date_str} (+{days} días)")
@@ -47,6 +48,10 @@ def run_backtest(start_date_str, days=5):
                 actionable_games += 1
                 is_correct = (prediction == actual_winner)
                 
+                # Calcular baseline dinámico (Victorias del local)
+                if actual_winner == g['home_name']:
+                    home_wins_in_bets += 1
+
                 if is_correct:
                     correct += 1
                     units_won += 0.95 # Asumiendo cuota promedio de -105 / 1.95
@@ -68,10 +73,12 @@ def run_backtest(start_date_str, days=5):
         if actionable_games > 0:
             accuracy = (correct / actionable_games) * 100
             roi = (units_won / actionable_games) * 100
-            print(f"🎯 ACCURACY EN APUESTAS: {accuracy:.1f}% ({correct}/{actionable_games})")
-            print(f"🏠 BASELINE DEL MERCADO: 50.25% (Aprox)")
+            baseline = (home_wins_in_bets / actionable_games) * 100 # NUEVO CÁLCULO
             
-            lift = accuracy - 50.25
+            print(f"🎯 ACCURACY EN APUESTAS: {accuracy:.1f}% ({correct}/{actionable_games})")
+            print(f"🏠 BASELINE DEL MERCADO (Submuestra): {baseline:.2f}%")
+            
+            lift = accuracy - baseline
             alpha_signal = "🚀 Señal Alpha Detectada" if lift > 2.5 else "⚠️ Ruido Estadístico"
             print(f"📈 LIFT REAL DEL MODELO: +{lift:.2f}% ({alpha_signal})")
             

@@ -71,14 +71,13 @@ class MLBDataLoader:
                         'status': g['status']['abstractGameState'],
                         'venue_id': g['venue']['id'],
                         'home_id': g['teams']['home']['team']['id'],
-                        'home_name': g['teams']['home']['team']['teamName'],
+                        'home_name': g['teams']['home']['team']['name'],  # <-- CORREGIDO AQUÍ
                         'home_pitcher': h_pitcher,
                         'away_id': g['teams']['away']['team']['id'],
-                        'away_name': g['teams']['away']['team']['teamName'],
+                        'away_name': g['teams']['away']['team']['name'],  # <-- CORREGIDO AQUÍ
                         'away_pitcher': a_pitcher,
                         'real_winner': None
                     }
-
                     if game_info['status'] == 'Final':
                         h_score = g['teams']['home'].get('score', 0)
                         a_score = g['teams']['away'].get('score', 0)

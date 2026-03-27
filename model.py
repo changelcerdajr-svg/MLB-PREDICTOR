@@ -1,5 +1,5 @@
 # model.py
-# Orquestador V16.0 (Motor Statcast Total: xwOBA y xERA)
+# Orquestador V17.0 (Motor Statcast Total: xwOBA y xERA reales)
 from config import SIMULATION_ROUNDS, STRESS_TEST_ROUNDS
 import pickle
 import os
@@ -22,11 +22,10 @@ class MLBPredictor:
                 self.calibrator = None
 
     def predict_game(self, game):
-        # 1. Contexto Temporal y de Liga
         schedule_df = self.loader.get_travel_schedule_window(game['date'], days_back=2)
         league_avg_runs = self.loader.get_league_run_environment(game['date'])
         
-        # 2. Pitcheo, Bullpen y Mano del Lanzador (STATCAST xERA)
+        # 2. Pitcheo con xERA
         h_pstats = self.loader.get_pitcher_xera_stats(game['home_pitcher'])
         a_pstats = self.loader.get_pitcher_xera_stats(game['away_pitcher'])
         
@@ -36,14 +35,14 @@ class MLBPredictor:
         h_bullpen = self.loader.get_bullpen_stats(game['home_id'])
         a_bullpen = self.loader.get_bullpen_stats(game['away_id'])
 
-        # 3. Lineups (STATCAST xwOBA)
+        # 3. Lineups con xwOBA
         h_xwoba, h_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'home')
         a_xwoba, a_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'away')
 
         if not h_confirmed or not a_confirmed:
             return {'error': 'Lineups no confirmados. Operación bloqueada para evitar sesgo de dominio.'}
 
-        # 4. Integración de Platoon Splits (L/R usando wOBA)
+        # 4. Integración de Platoon Splits
         h_split = self.loader.get_team_stats_split(game['home_id'], a_hand)
         a_split = self.loader.get_team_stats_split(game['away_id'], h_hand)
         
@@ -78,27 +77,19 @@ class MLBPredictor:
         
         pf = self.engine.get_park_factor(game['venue_id'])
 
-        # 7. Cálculo de Scores Base con Termodinámica Vectorial
+        # 7. Cálculo de Scores Base con Clima
         weather_data = self.loader.get_weather(game['venue_id'])
         
-        h_power = self.engine.calculate_power_score(
-            h_xwoba_adj, pf, league_avg_runs, game['home_id'], 
-            game['date'], schedule_df, weather_data, game['venue_id']
-        ) * h_streak_mult
-        
-        a_power = self.engine.calculate_power_score(
-            a_xwoba_adj, pf, league_avg_runs, game['away_id'], 
-            game['date'], schedule_df, weather_data, game['venue_id']
-        ) * a_streak_mult
+        h_power = self.engine.calculate_power_score(h_xwoba_adj, pf, league_avg_runs, game['home_id'], game['date'], schedule_df, weather_data, game['venue_id']) * h_streak_mult
+        a_power = self.engine.calculate_power_score(a_xwoba_adj, pf, league_avg_runs, game['away_id'], game['date'], schedule_df, weather_data, game['venue_id']) * a_streak_mult
         
         h_def_ra9 = self.engine.calculate_defense_score(h_pstats, h_bullpen, h_fatigue, h_fielding)
         a_def_ra9 = self.engine.calculate_defense_score(a_pstats, a_bullpen, a_fatigue, a_fielding)
 
-        # --- VMR Dinámico basado en K/9 ---
+        # 8. Simulación Estocástica Principal
         avg_k9 = (h_pstats['k9'] + a_pstats['k9']) / 2.0
         k9_vmr_adj = 1.0 + ((7.5 - avg_k9) * 0.02)
 
-        # 8. Simulación Estocástica Principal
         win_prob, h_runs, a_runs, _ = self.engine.run_monte_carlo_simulation(
             h_pow=h_power, h_def=h_def_ra9, 
             a_pow=a_power, a_def=a_def_ra9, 
@@ -110,12 +101,12 @@ class MLBPredictor:
         delta_h = h_xwoba_adj * 0.05
         delta_a = a_xwoba_adj * 0.05
         
-        h_pow_high = self.engine.calculate_power_score(h_xwoba_adj + delta_h, pf, league_avg_runs, game['home_id'], game['date'], schedule_df) * h_streak_mult
-        a_pow_low = self.engine.calculate_power_score(a_xwoba_adj - delta_a, pf, league_avg_runs, game['away_id'], game['date'], schedule_df) * a_streak_mult
+        h_pow_high = self.engine.calculate_power_score(h_xwoba_adj + delta_h, pf, league_avg_runs, game['home_id'], game['date'], schedule_df, weather_data, game['venue_id']) * h_streak_mult
+        a_pow_low = self.engine.calculate_power_score(a_xwoba_adj - delta_a, pf, league_avg_runs, game['away_id'], game['date'], schedule_df, weather_data, game['venue_id']) * a_streak_mult
         prob_high, _, _, _ = self.engine.run_monte_carlo_simulation(h_pow_high, h_def_ra9, a_pow_low, a_def_ra9, STRESS_TEST_ROUNDS, league_avg_runs, pf, k9_adj=k9_vmr_adj)
         
-        h_pow_low = self.engine.calculate_power_score(h_xwoba_adj - delta_h, pf, league_avg_runs, game['home_id'], game['date'], schedule_df) * h_streak_mult
-        a_pow_high = self.engine.calculate_power_score(a_xwoba_adj + delta_a, pf, league_avg_runs, game['away_id'], game['date'], schedule_df) * a_streak_mult
+        h_pow_low = self.engine.calculate_power_score(h_xwoba_adj - delta_h, pf, league_avg_runs, game['home_id'], game['date'], schedule_df, weather_data, game['venue_id']) * h_streak_mult
+        a_pow_high = self.engine.calculate_power_score(a_xwoba_adj + delta_a, pf, league_avg_runs, game['away_id'], game['date'], schedule_df, weather_data, game['venue_id']) * a_streak_mult
         prob_low, _, _, _ = self.engine.run_monte_carlo_simulation(h_pow_low, h_def_ra9, a_pow_high, a_def_ra9, STRESS_TEST_ROUNDS, league_avg_runs, pf, k9_adj=k9_vmr_adj)
         
         input_sensitivity = abs(prob_high - prob_low) / 2

@@ -1,16 +1,20 @@
 # data_loader.py
-# Ingesta V16.2 (Regresión a OPS/FIP reales, K-Factors Estabilizados y Cohesión Calibrada)
+# Ingesta V17.0 (Integración Statcast Real vía Baseball Savant + Bayesian Shrinkage Óptimo)
 
 import requests
 import datetime
 import numpy as np
+import pandas as pd
 from config import API_URL, USER_AGENT, USE_REAL_TIME, TEST_DATE, STADIUM_COORDS
 
-# CONSTANTES DE ESTABILIZACIÓN RESTAURADAS A NIVELES SEGUROS
-K_BATTER_OPS = 300  
-K_PITCHER_FIP = 75  
-LEAGUE_AVG_OPS = 0.720
-LEAGUE_AVG_FIP = 4.30
+# Importamos nuestro nuevo motor de extracción
+from statcast_scraper import StatcastScraper
+
+# CONSTANTES DE ESTABILIZACIÓN STATCAST (Ventaja Institucional Restaurada)
+K_BATTER_XWOBA = 50  # El radar estabiliza el contacto en 50 turnos
+K_PITCHER_XERA = 30  # El radar estabiliza la calidad de lanzamientos en 30 innings
+LEAGUE_AVG_XWOBA = 0.315
+LEAGUE_AVG_XERA = 4.00
 
 class MLBDataLoader:
     def __init__(self):
@@ -19,6 +23,9 @@ class MLBDataLoader:
         self.standings_cache = {} 
         self.player_history_cache = {} 
         self._force_historical_mode = False
+        
+        # Inicializamos el Scraper de Savant
+        self.savant = StatcastScraper()
 
     def _get(self, endpoint, params=None):
         try:
@@ -89,13 +96,29 @@ class MLBDataLoader:
         cache_key = f"{pid}_{stat_group}_{self.current_season_year-1}"
         if cache_key in self.player_history_cache:
             return self.player_history_cache[cache_key]
+        
         prev_year = self.current_season_year - 1
+        
+        # Primero intentamos sacar el dato histórico desde Baseball Savant
+        if stat_group == 'hitting':
+            res = self.savant.get_batter_xwoba(pid, prev_year)
+            if res is not None:
+                self.player_history_cache[cache_key] = res
+                return res
+        else:
+            res = self.savant.get_pitcher_xera(pid, prev_year)
+            if res is not None:
+                self.player_history_cache[cache_key] = res
+                return res
+
+        # Fallback a OPS/FIP histórico si falla Savant
         try:
             data = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': stat_group, 'season': prev_year})
             if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
                 stat = data['stats'][0]['splits'][0]['stat']
                 if stat_group == 'hitting':
-                    res = float(stat.get('ops', LEAGUE_AVG_OPS))
+                    ops = float(stat.get('ops', 0.720))
+                    res = ops * (0.315 / 0.720) # Conversión aproximada para el año anterior
                 else:
                     ip = float(stat.get('inningsPitched', 1.0))
                     if ip > 10:
@@ -104,20 +127,21 @@ class MLBDataLoader:
                         k = int(stat.get('strikeouts', 0))
                         res = ((13 * hr) + (3 * bb) - (2 * k)) / ip + 3.20
                     else:
-                        res = float(stat.get('era', LEAGUE_AVG_FIP))
+                        res = float(stat.get('era', LEAGUE_AVG_XERA))
                 self.player_history_cache[cache_key] = res
                 return res
         except: pass
-        default = LEAGUE_AVG_OPS if stat_group == 'hitting' else LEAGUE_AVG_FIP
+        
+        default = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA
         self.player_history_cache[cache_key] = default
         return default
 
-    def get_pitcher_fip_stats(self, pid):
-        stats = {'era': 4.50, 'fip': LEAGUE_AVG_FIP, 'k9': 7.5} 
+    def get_pitcher_xera_stats(self, pid):
+        stats = {'era': 4.50, 'xera': LEAGUE_AVG_XERA, 'k9': 7.5} 
         if not pid: return stats
         try:
+            # 1. Obtenemos datos de volumen (Innings y Ponches) de MLB API
             d = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': 'pitching'})
-            current_fip = LEAGUE_AVG_FIP
             current_ip = 0.0
             current_era = 4.50
             current_k9 = 7.5
@@ -127,21 +151,24 @@ class MLBDataLoader:
                 current_ip = float(s.get('inningsPitched', 0.0))
                 current_era = float(s.get('era', 4.50))
                 current_k9 = float(s.get('strikeoutsPer9Inn', 7.5))
-                hr = int(s.get('homeRuns', 0))
-                bb = int(s.get('baseOnBalls', 0))
-                hbp = int(s.get('hitByPitch', 0))
-                k = int(s.get('strikeouts', 0))
-                if current_ip > 0.1:
-                    current_fip = ((13 * hr) + (3 * (bb + hbp)) - (2 * k)) / current_ip + 3.20
-                else: current_fip = current_era
+            
+            # 2. Obtenemos el xERA real de Baseball Savant
+            savant_xera = self.savant.get_pitcher_xera(pid, self.current_season_year)
+            
+            if savant_xera is not None:
+                current_xera = savant_xera
+            else:
+                # Fallback a ERA si Savant no lo tiene aún
+                current_xera = current_era
 
-            prior_fip = self._get_prior_stats(pid, 'pitching')
-            projected_fip = self._apply_bayesian_shrinkage(current_fip, current_ip, K_PITCHER_FIP, prior_fip)
-            stats = {'era': current_era, 'fip': projected_fip, 'k9': current_k9}
+            # 3. Encogimiento Bayesiano
+            prior_xera = self._get_prior_stats(pid, 'pitching')
+            projected_xera = self._apply_bayesian_shrinkage(current_xera, current_ip, K_PITCHER_XERA, prior_xera)
+            stats = {'era': current_era, 'xera': projected_xera, 'k9': current_k9}
         except: pass
         return stats
 
-    def get_confirmed_lineup_ops(self, game_pk, team_type):
+    def get_confirmed_lineup_xwoba(self, game_pk, team_type):
         try:
             box = self._get(f"game/{game_pk}/boxscore")
             if not box: return (None, False)
@@ -149,49 +176,60 @@ class MLBDataLoader:
             if not batters_ids: return (None, False)
             
             ids_str = ",".join([str(x) for x in batters_ids])
+            # MLB API solo para volumen (At Bats)
             people_data = self._get("people", {'personIds': ids_str, 'hydrate': 'stats(group=[hitting],type=[season])'})
             
-            ops_map = {}
+            xwoba_map = {}
             if people_data and 'people' in people_data:
                 for p in people_data['people']:
                     pid = p['id']
-                    current_ops = LEAGUE_AVG_OPS
                     current_ab = 0
+                    
                     s = p.get('stats', [])
                     if s and s[0].get('splits'):
                         stat = s[0]['splits'][0]['stat']
                         current_ab = int(stat.get('atBats', 0))
-                        current_ops = float(stat.get('ops', LEAGUE_AVG_OPS))
                     
-                    prior_ops = self._get_prior_stats(pid, 'hitting')
-                    projected_ops = self._apply_bayesian_shrinkage(current_ops, current_ab, K_BATTER_OPS, prior_ops)
-                    ops_map[pid] = projected_ops
+                    # Extraemos el xwOBA real desde Savant
+                    savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
+                    
+                    if savant_xwoba is not None:
+                        current_xwoba = savant_xwoba
+                    else:
+                        # Fallback a OPS convertido si Savant no tiene el dato
+                        try:
+                            ops = float(s[0]['splits'][0]['stat'].get('ops', 0.720))
+                            current_xwoba = ops * (0.315 / 0.720)
+                        except:
+                            current_xwoba = LEAGUE_AVG_XWOBA
+
+                    prior_xwoba = self._get_prior_stats(pid, 'hitting')
+                    projected_xwoba = self._apply_bayesian_shrinkage(current_xwoba, current_ab, K_BATTER_XWOBA, prior_xwoba)
+                    xwoba_map[pid] = projected_xwoba
 
             weights = [1.32, 1.28, 1.15, 1.05, 1.00, 0.92, 0.85, 0.78, 0.65] 
             weighted_sum = 0
             total_weight = 0
-            ops_values_list = []
+            xwoba_values_list = []
             
             for i, pid in enumerate(batters_ids):
                 if i < len(weights):
                     w = weights[i]
-                    p_ops = ops_map.get(pid, LEAGUE_AVG_OPS)
-                    ops_values_list.append(p_ops)
-                    weighted_sum += (p_ops * w)
+                    p_xwoba = xwoba_map.get(pid, LEAGUE_AVG_XWOBA)
+                    xwoba_values_list.append(p_xwoba)
+                    weighted_sum += (p_xwoba * w)
                     total_weight += w
                     
             if total_weight > 0: 
-                lineup_variance = np.std(ops_values_list) if len(ops_values_list) > 0 else 0
-                # FIX DEL AUDITOR: Magnitud real para la varianza. Un equipo parejo (std=0.03) 
-                # recibe un bono de +2.5%. Un equipo con estrellas y huecos (std=0.10) pierde -1.0%.
+                lineup_variance = np.std(xwoba_values_list) if len(xwoba_values_list) > 0 else 0
                 cohesion_factor = 1.0 + ((0.08 - lineup_variance) * 0.5)
-                final_ops = (weighted_sum / total_weight) * cohesion_factor
-                return (final_ops, True)
+                final_xwoba = (weighted_sum / total_weight) * cohesion_factor
+                return (final_xwoba, True)
         except Exception as e: 
             pass
         return (None, False)
 
-    # Resto de funciones auxiliares (sin cambios respecto a V15.6)
+    # El resto de las funciones se mantienen sin cambios estructurales
     def get_team_fielding_speed(self, team_id):
         res = {'fielding': 0.985, 'sb_game': 0.5} 
         try:
@@ -217,16 +255,18 @@ class MLBDataLoader:
         return stats
 
     def get_team_stats_split(self, team_id, opponent_hand):
-        stats = {'ops': 0.700}
+        stats = {'woba': 0.315}
         try:
             split_code = "vsL" if opponent_hand == 'L' else "vsR"
             data = self._get(f"teams/{team_id}/stats", {'stats': 'vsOpponents', 'group': 'hitting', 'sitCodes': split_code})
             if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                stats['ops'] = float(data['stats'][0]['splits'][0]['stat'].get('ops', 0.700))
+                s = data['stats'][0]['splits'][0]['stat']
+                # Transformamos el OPS del split a la escala wOBA (ya que Savant no da splits tan fácil)
+                ops = float(s.get('ops', 0.720))
+                stats['woba'] = ops * (0.315 / 0.720)
         except: pass
         return stats
     
-    # EL FIX ESTELAR: PITAGÓRICA ANCLADA
     def get_team_pythagorean_data(self, team_id, date_str=None):
         try:
             params = {'leagueId': '103,104', 'season': self.current_season_year}
@@ -318,4 +358,4 @@ class MLBDataLoader:
             return d['current_weather']
         except: return {'temperature': 20, 'windspeed': 5, 'winddirection': 45}
 
-    def get_pitcher_stats(self, pid): return self.get_pitcher_fip_stats(pid)
+    def get_pitcher_stats(self, pid): return self.get_pitcher_xera_stats(pid)

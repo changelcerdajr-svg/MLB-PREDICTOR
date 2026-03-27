@@ -1,5 +1,5 @@
 # features.py
-# Motor Cuantitativo V16.2 (Azimuts Expandidos y Coeficiente de Viento FanGraphs)
+# Motor Cuantitativo V17.0 (Statcast Real con Termodinámica FanGraphs)
 
 import numpy as np
 import math
@@ -7,29 +7,9 @@ from config import PARK_FACTORS
 
 # Base empírica de orientaciones (Grados desde el Norte geográfico hacia el CF)
 STADIUM_AZIMUTHS = {
-    1: 45,    # Default aproximado (NE) para estadios sin anomalías extremas
-    2: 45,    # Oriole Park (NE)
-    3: 180,   # Tropicana Field (S - Domo, el viento no importa pero se registra)
-    5: 45,    # Progressive Field (NE)
-    7: 135,   # Kauffman Stadium (SE)
-    8: 135,   # Comerica Park (SE)
-    9: 45,    # Fenway Park (NE)
-    10: 45,   # Rogers Centre (NE - Techo retráctil)
-    11: 135,  # T-Mobile Park (SE)
-    12: 135,  # Guaranteed Rate Field (SE)
-    13: 45,   # Target Field (NE)
-    14: 45,   # Angel Stadium (NE)
-    15: 0,    # Chase Field (N - Techo retráctil)
-    17: 45,   # Wrigley Field (NE)
-    18: 90,   # Great American Ball Park (E)
-    19: 0,    # Coors Field (N)
-    21: 45,   # Citizens Bank Park (NE)
-    22: 180,  # Dodger Stadium (S - Ligeramente SE)
-    24: 90,   # Oracle Park (E)
-    28: 135,  # Truist Park (SE)
-    31: 45,   # Citi Field (NE)
-    32: 65,   # Yankee Stadium (ENE)
-    33: 340,  # Minute Maid Park (NNW - Techo retráctil)
+    1: 45, 2: 45, 3: 180, 5: 45, 7: 135, 8: 135, 9: 45, 10: 45, 
+    11: 135, 12: 135, 13: 45, 14: 45, 15: 0, 17: 45, 18: 90, 19: 0, 
+    21: 45, 22: 180, 24: 90, 28: 135, 31: 45, 32: 65, 33: 340,
 }
 
 class FeatureEngine:
@@ -45,7 +25,7 @@ class FeatureEngine:
         wind_speed_kmh = weather_data.get('windspeed', 0.0)
         wind_dir = weather_data.get('winddirection', 45.0)
 
-        # Temp: +1°C = +0.4% incremento en carreraje
+        # Temp: +1 grado C = +0.4% incremento en carreraje
         temp_adj = 1.0 + ((temp_c - 21.0) * 0.004)
 
         wind_speed_mph = wind_speed_kmh / 1.609
@@ -55,20 +35,21 @@ class FeatureEngine:
         angle_rad = math.radians(blowing_to - azimuth)
         effective_wind = wind_speed_mph * math.cos(angle_rad)
 
-        # FIX AUDITORÍA: El coeficiente empírico validado es ~0.4% por mph de viento efectivo
+        # Coeficiente empírico validado: ~0.4% por mph de viento efectivo
         wind_adj = 1.0 + (effective_wind * 0.004)
 
         return max(0.85, min(1.20, temp_adj * wind_adj))
 
-    def calculate_power_score(self, ops, park_factor, league_avg_runs, team_id, game_date, schedule_data, weather_data=None, venue_id=1):
+    def calculate_power_score(self, xwoba, park_factor, league_avg_runs, team_id, game_date, schedule_data, weather_data=None, venue_id=1):
         try: pf_value = float(park_factor)
         except (TypeError, ValueError): pf_value = 1.0
 
         weather_multiplier = self.calculate_weather_multiplier(venue_id, weather_data)
 
-        league_ops_base = 0.720
-        ops_scale = ops / league_ops_base
-        base_runs = ops_scale * league_avg_runs
+        # Lógica Statcast real
+        league_xwoba_base = 0.315
+        xwoba_scale = xwoba / league_xwoba_base
+        base_runs = xwoba_scale * league_avg_runs
         
         base_score = base_runs * pf_value * weather_multiplier
 
@@ -81,9 +62,10 @@ class FeatureEngine:
         return final_score
 
     def calculate_defense_score(self, p_stats, bullpen_stats, fatigue, fielding_factor):
-        starter_fip = p_stats.get('fip', 4.30) if p_stats else 4.30
+        # Lógica Statcast real
+        starter_xera = p_stats.get('xera', 4.00) if p_stats else 4.00
         bullpen_era = bullpen_stats.get('era', 4.10) if bullpen_stats else 4.10
-        prevention_score = (starter_fip * 0.60) + (bullpen_era * 0.40)
+        prevention_score = (starter_xera * 0.60) + (bullpen_era * 0.40)
         
         if isinstance(fielding_factor, dict):
             ff_value = fielding_factor.get('fielding', 0.985)

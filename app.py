@@ -190,7 +190,7 @@ if games:
                 <table style='width:100%; font-size:0.95em; font-weight:600; color:#E5E5EA;'>
                     <tr><td style='color:#8E8E93; padding-bottom:8px;'>Sensibilidad</td><td style='text-align:right; color:#19B664;'>{sens}</td></tr>
                     <tr><td style='color:#8E8E93; padding-bottom:8px;'>Fatiga</td><td style='text-align:right;'>{fat_txt}</td></tr>
-                    <tr><td style='color:#8E8E93; padding-bottom:8px;'>FIP</td><td style='text-align:right;'>{fip_txt}</td></tr>
+                    <tr><td style='color:#8E8E93; padding-bottom:8px;'>Statcast (xERA)</td><td style='text-align:right;'>{fip_txt}</td></tr>
                 </table>
             </div>
             """, unsafe_allow_html=True)
@@ -259,7 +259,7 @@ if games:
                     st.success("¡Operación registrada en tu historial de operaciones!")
                 else:
                     st.warning("Este juego ya estaba guardado en tu bitácora de hoy.")
-                    
+
         # BLOQUE 3: ESTRUCTURA
         st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
         cf1, cf2 = st.columns(2)

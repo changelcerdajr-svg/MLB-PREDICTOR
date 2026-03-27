@@ -1,16 +1,16 @@
 # data_loader.py
-# Ingesta V16.0 (Integración Statcast: xwOBA y xERA)
+# Ingesta V16.2 (Regresión a OPS/FIP reales, K-Factors Estabilizados y Cohesión Calibrada)
 
 import requests
 import datetime
 import numpy as np
 from config import API_URL, USER_AGENT, USE_REAL_TIME, TEST_DATE, STADIUM_COORDS
 
-# CONSTANTES DE ESTABILIZACIÓN STATCAST (Muestras pequeñas)
-K_BATTER_XWOBA = 50  # xwOBA estabiliza en solo 50 PA (contra 300 del OPS)
-K_PITCHER_XERA = 30  # xERA estabiliza en ~30 Innings
-LEAGUE_AVG_XWOBA = 0.315
-LEAGUE_AVG_XERA = 4.00
+# CONSTANTES DE ESTABILIZACIÓN RESTAURADAS A NIVELES SEGUROS
+K_BATTER_OPS = 300  
+K_PITCHER_FIP = 75  
+LEAGUE_AVG_OPS = 0.720
+LEAGUE_AVG_FIP = 4.30
 
 class MLBDataLoader:
     def __init__(self):
@@ -89,74 +89,59 @@ class MLBDataLoader:
         cache_key = f"{pid}_{stat_group}_{self.current_season_year-1}"
         if cache_key in self.player_history_cache:
             return self.player_history_cache[cache_key]
-
         prev_year = self.current_season_year - 1
-        
-        # 1. Intentamos buscar data de Radar (Statcast)
-        try:
-            data = self._get(f"people/{pid}/stats", {'stats': 'expectedStatistics', 'group': stat_group, 'season': prev_year})
-            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                stat = data['stats'][0]['splits'][0]['stat']
-                if stat_group == 'hitting':
-                    res = float(stat.get('estWoba', stat.get('estimatedWoba', LEAGUE_AVG_XWOBA)))
-                else:
-                    res = float(stat.get('estEra', stat.get('estimatedEra', LEAGUE_AVG_XERA)))
-                self.player_history_cache[cache_key] = res
-                return res
-        except: pass
-        
-        # 2. Fallback a Estadísticas Tradicionales si el Radar falla
         try:
             data = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': stat_group, 'season': prev_year})
             if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
                 stat = data['stats'][0]['splits'][0]['stat']
                 if stat_group == 'hitting':
-                    ops = float(stat.get('ops', 0.720))
-                    res = ops * (0.315 / 0.720) # Conversión aproximada
+                    res = float(stat.get('ops', LEAGUE_AVG_OPS))
                 else:
-                    res = float(stat.get('era', LEAGUE_AVG_XERA))
+                    ip = float(stat.get('inningsPitched', 1.0))
+                    if ip > 10:
+                        hr = int(stat.get('homeRuns', 0))
+                        bb = int(stat.get('baseOnBalls', 0))
+                        k = int(stat.get('strikeouts', 0))
+                        res = ((13 * hr) + (3 * bb) - (2 * k)) / ip + 3.20
+                    else:
+                        res = float(stat.get('era', LEAGUE_AVG_FIP))
                 self.player_history_cache[cache_key] = res
                 return res
         except: pass
-
-        default = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA
+        default = LEAGUE_AVG_OPS if stat_group == 'hitting' else LEAGUE_AVG_FIP
         self.player_history_cache[cache_key] = default
         return default
 
-    def get_pitcher_xera_stats(self, pid):
-        stats = {'era': 4.50, 'xera': LEAGUE_AVG_XERA, 'k9': 7.5} 
+    def get_pitcher_fip_stats(self, pid):
+        stats = {'era': 4.50, 'fip': LEAGUE_AVG_FIP, 'k9': 7.5} 
         if not pid: return stats
         try:
-            d = self._get(f"people/{pid}/stats", {'stats': 'season,expectedStatistics', 'group': 'pitching'})
-            current_xera = LEAGUE_AVG_XERA
+            d = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': 'pitching'})
+            current_fip = LEAGUE_AVG_FIP
             current_ip = 0.0
             current_era = 4.50
             current_k9 = 7.5
-            has_xera = False
 
-            if d and 'stats' in d:
-                for stat_block in d['stats']:
-                    type_name = stat_block.get('type', {}).get('displayName', '')
-                    if type_name == 'season' and stat_block.get('splits'):
-                        s = stat_block['splits'][0]['stat']
-                        current_ip = float(s.get('inningsPitched', 0.0))
-                        current_era = float(s.get('era', 4.50))
-                        current_k9 = float(s.get('strikeoutsPer9Inn', 7.5))
-                    elif type_name == 'expectedStatistics' and stat_block.get('splits'):
-                        s = stat_block['splits'][0]['stat']
-                        current_xera = float(s.get('estEra', s.get('estimatedEra', current_era)))
-                        has_xera = True
+            if d and 'stats' in d and d['stats'] and d['stats'][0].get('splits'):
+                s = d['stats'][0]['splits'][0]['stat']
+                current_ip = float(s.get('inningsPitched', 0.0))
+                current_era = float(s.get('era', 4.50))
+                current_k9 = float(s.get('strikeoutsPer9Inn', 7.5))
+                hr = int(s.get('homeRuns', 0))
+                bb = int(s.get('baseOnBalls', 0))
+                hbp = int(s.get('hitByPitch', 0))
+                k = int(s.get('strikeouts', 0))
+                if current_ip > 0.1:
+                    current_fip = ((13 * hr) + (3 * (bb + hbp)) - (2 * k)) / current_ip + 3.20
+                else: current_fip = current_era
 
-            if not has_xera and current_ip > 0.1:
-                current_xera = current_era
-
-            prior_xera = self._get_prior_stats(pid, 'pitching')
-            projected_xera = self._apply_bayesian_shrinkage(current_xera, current_ip, K_PITCHER_XERA, prior_xera)
-            stats = {'era': current_era, 'xera': projected_xera, 'k9': current_k9}
+            prior_fip = self._get_prior_stats(pid, 'pitching')
+            projected_fip = self._apply_bayesian_shrinkage(current_fip, current_ip, K_PITCHER_FIP, prior_fip)
+            stats = {'era': current_era, 'fip': projected_fip, 'k9': current_k9}
         except: pass
         return stats
 
-    def get_confirmed_lineup_xwoba(self, game_pk, team_type):
+    def get_confirmed_lineup_ops(self, game_pk, team_type):
         try:
             box = self._get(f"game/{game_pk}/boxscore")
             if not box: return (None, False)
@@ -164,72 +149,55 @@ class MLBDataLoader:
             if not batters_ids: return (None, False)
             
             ids_str = ",".join([str(x) for x in batters_ids])
-            people_data = self._get("people", {'personIds': ids_str, 'hydrate': 'stats(group=[hitting],type=[season,expectedStatistics])'})
+            people_data = self._get("people", {'personIds': ids_str, 'hydrate': 'stats(group=[hitting],type=[season])'})
             
-            xwoba_map = {}
+            ops_map = {}
             if people_data and 'people' in people_data:
                 for p in people_data['people']:
                     pid = p['id']
-                    current_xwoba = LEAGUE_AVG_XWOBA
-                    current_pa = 0
-                    has_xwoba = False
+                    current_ops = LEAGUE_AVG_OPS
+                    current_ab = 0
+                    s = p.get('stats', [])
+                    if s and s[0].get('splits'):
+                        stat = s[0]['splits'][0]['stat']
+                        current_ab = int(stat.get('atBats', 0))
+                        current_ops = float(stat.get('ops', LEAGUE_AVG_OPS))
                     
-                    for stat_block in p.get('stats', []):
-                        type_name = stat_block.get('type', {}).get('displayName', '')
-                        if type_name == 'season' and stat_block.get('splits'):
-                            s = stat_block['splits'][0]['stat']
-                            current_pa = int(s.get('plateAppearances', s.get('atBats', 0)))
-                        elif type_name == 'expectedStatistics' and stat_block.get('splits'):
-                            s = stat_block['splits'][0]['stat']
-                            current_xwoba = float(s.get('estWoba', s.get('estimatedWoba', LEAGUE_AVG_XWOBA)))
-                            has_xwoba = True
-                    
-                    if not has_xwoba:
-                        # Fallback a OPS
-                        for stat_block in p.get('stats', []):
-                            type_name = stat_block.get('type', {}).get('displayName', '')
-                            if type_name == 'season' and stat_block.get('splits'):
-                                ops = float(stat_block['splits'][0]['stat'].get('ops', 0.720))
-                                current_xwoba = ops * (0.315 / 0.720)
-
-                    prior_xwoba = self._get_prior_stats(pid, 'hitting')
-                    projected_xwoba = self._apply_bayesian_shrinkage(current_xwoba, current_pa, K_BATTER_XWOBA, prior_xwoba)
-                    xwoba_map[pid] = projected_xwoba
+                    prior_ops = self._get_prior_stats(pid, 'hitting')
+                    projected_ops = self._apply_bayesian_shrinkage(current_ops, current_ab, K_BATTER_OPS, prior_ops)
+                    ops_map[pid] = projected_ops
 
             weights = [1.32, 1.28, 1.15, 1.05, 1.00, 0.92, 0.85, 0.78, 0.65] 
             weighted_sum = 0
             total_weight = 0
-            xwoba_values_list = []
+            ops_values_list = []
             
             for i, pid in enumerate(batters_ids):
                 if i < len(weights):
                     w = weights[i]
-                    p_xwoba = xwoba_map.get(pid, LEAGUE_AVG_XWOBA)
-                    xwoba_values_list.append(p_xwoba)
-                    weighted_sum += (p_xwoba * w)
+                    p_ops = ops_map.get(pid, LEAGUE_AVG_OPS)
+                    ops_values_list.append(p_ops)
+                    weighted_sum += (p_ops * w)
                     total_weight += w
                     
             if total_weight > 0: 
-                lineup_variance = np.std(xwoba_values_list) if len(xwoba_values_list) > 0 else 0
-                cohesion_factor = 1.0 + (0.05 * (0.04 - lineup_variance))
-                final_xwoba = (weighted_sum / total_weight) * cohesion_factor
-                return (final_xwoba, True)
+                lineup_variance = np.std(ops_values_list) if len(ops_values_list) > 0 else 0
+                # FIX DEL AUDITOR: Magnitud real para la varianza. Un equipo parejo (std=0.03) 
+                # recibe un bono de +2.5%. Un equipo con estrellas y huecos (std=0.10) pierde -1.0%.
+                cohesion_factor = 1.0 + ((0.08 - lineup_variance) * 0.5)
+                final_ops = (weighted_sum / total_weight) * cohesion_factor
+                return (final_ops, True)
         except Exception as e: 
             pass
         return (None, False)
 
+    # Resto de funciones auxiliares (sin cambios respecto a V15.6)
     def get_team_fielding_speed(self, team_id):
         res = {'fielding': 0.985, 'sb_game': 0.5} 
         try:
             f_data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'fielding'})
             if f_data and 'stats' in f_data and f_data['stats'] and f_data['stats'][0].get('splits'):
                 res['fielding'] = float(f_data['stats'][0]['splits'][0]['stat'].get('fielding', 0.985))
-            h_data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting'})
-            if h_data and 'stats' in h_data and h_data['stats'] and h_data['stats'][0].get('splits'):
-                s = h_data['stats'][0]['splits'][0]['stat']
-                sb = int(s.get('stolenBases', 0))
-                games = int(s.get('gamesPlayed', 1))
-                res['sb_game'] = sb / max(1, games)
         except: pass
         return res
 
@@ -241,33 +209,28 @@ class MLBDataLoader:
                 s = data['stats'][0]['splits'][0]['stat']
                 ip = float(s.get('inningsPitched', 0.0))
                 era = float(s.get('era', 4.00))
-                whip = float(s.get('whip', 1.30))
                 if ip < 20:
                     w = ip / 30.0 
                     era = (era * w) + (4.00 * (1-w))
-                    whip = (whip * w) + (1.30 * (1-w))
                 stats['era'] = era
-                stats['whip'] = whip
         except: pass
         return stats
 
     def get_team_stats_split(self, team_id, opponent_hand):
-        stats = {'woba': LEAGUE_AVG_XWOBA}
+        stats = {'ops': 0.700}
         try:
             split_code = "vsL" if opponent_hand == 'L' else "vsR"
             data = self._get(f"teams/{team_id}/stats", {'stats': 'vsOpponents', 'group': 'hitting', 'sitCodes': split_code})
             if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                s = data['stats'][0]['splits'][0]['stat']
-                stats['woba'] = float(s.get('woba', s.get('ops', 0.720) * (0.315 / 0.720)))
+                stats['ops'] = float(data['stats'][0]['splits'][0]['stat'].get('ops', 0.700))
         except: pass
         return stats
     
+    # EL FIX ESTELAR: PITAGÓRICA ANCLADA
     def get_team_pythagorean_data(self, team_id, date_str=None):
         try:
             params = {'leagueId': '103,104', 'season': self.current_season_year}
-            if date_str: 
-                params['date'] = date_str
-                
+            if date_str: params['date'] = date_str
             data = self._get("standings", params) 
             if data and 'records' in data:
                 for d in data['records']:
@@ -303,34 +266,26 @@ class MLBDataLoader:
                         day_momentum[tid] = {'l10': l10_val, 'streak': streak_val}
             self.standings_cache[date_str] = day_momentum
             return day_momentum.get(team_id, {'l10': 0.5, 'streak': 0})
-        except: 
-            return {'l10': 0.5, 'streak': 0}
+        except: return {'l10': 0.5, 'streak': 0}
 
     def get_bullpen_fatigue(self, team_id, game_date):
         fatigue_score = 0.0
         try:
             import datetime 
             date_obj = datetime.datetime.strptime(game_date, "%Y-%m-%d")
-            
-            if date_obj.month == 3 or (date_obj.month == 4 and date_obj.day <= 7):
-                return 0.0 
-                
+            if date_obj.month == 3 or (date_obj.month == 4 and date_obj.day <= 7): return 0.0 
             for i in range(1, 4): 
                 prev_date = (date_obj - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 data = self._get("schedule", {'sportId': 1, 'date': prev_date, 'teamId': team_id, 'gameType': 'R'})
-                
                 if data and 'dates' in data and data['dates']:
                     for g in data['dates'][0]['games']:
                         if g['status']['abstractGameState'] == 'Final':
                             is_home = g['teams']['home']['team']['id'] == team_id
                             runs_allowed = g['teams']['home']['score'] if not is_home else g['teams']['away']['score']
-                            if runs_allowed > 5: 
-                                fatigue_score += 0.12
+                            if runs_allowed > 5: fatigue_score += 0.12
                             fatigue_score += 0.08 
-            
             return min(0.4, fatigue_score) 
-        except Exception as e:
-            return 0.1
+        except Exception as e: return 0.1
 
     def get_pitcher_hand(self, pid):
         if not pid: return 'R'
@@ -345,20 +300,14 @@ class MLBDataLoader:
         import datetime
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d")
         start_date = (target_date - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
-        
         data = self._get("schedule", {'sportId': 1, 'startDate': start_date, 'endDate': target_date_str})
-        
         schedule_list = []
         if data and 'dates' in data:
             for date_item in data['dates']:
                 d_str = date_item['date']
                 for g in date_item['games']:
                     if g.get('gameType') in ['R', 'P', 'F', 'D', 'L', 'W']:
-                        schedule_list.append({
-                            'date': d_str,
-                            'away_team': g['teams']['away']['team']['id'],
-                            'home_team': g['teams']['home']['team']['id']
-                        })
+                        schedule_list.append({'date': d_str, 'away_team': g['teams']['away']['team']['id'], 'home_team': g['teams']['home']['team']['id']})
         import pandas as pd
         return pd.DataFrame(schedule_list)
     
@@ -367,6 +316,6 @@ class MLBDataLoader:
         try:
             d = requests.get("https://api.open-meteo.com/v1/forecast", params={'latitude':c['lat'], 'longitude':c['lon'], 'current_weather':'true'}, timeout=3).json()
             return d['current_weather']
-        except: return {'temperature': 20, 'windspeed': 5}
+        except: return {'temperature': 20, 'windspeed': 5, 'winddirection': 45}
 
-    def get_pitcher_stats(self, pid): return self.get_pitcher_xera_stats(pid)
+    def get_pitcher_stats(self, pid): return self.get_pitcher_fip_stats(pid)

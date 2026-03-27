@@ -1,8 +1,11 @@
 # backtest_final.py
-# Motor de Validación V17.0 (Sincronizado con Statcast + Clima Vectorial)
+# Motor de Validación V17.1 (Sincronizado con Statcast + Medición de Alpha Real)
 
 from model import MLBPredictor
 import datetime
+
+# --- CONFIGURACIÓN DE RIESGO ---
+CONFIDENCE_THRESHOLD = 0.55  # Solo operamos juegos con más de 55% de probabilidad calibrada
 
 def run_backtest(start_date_str, days=5):
     # Usamos el predictor que ya tiene integrado el Scraper y la calibración
@@ -10,18 +13,20 @@ def run_backtest(start_date_str, days=5):
     start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
     
     total_games = 0
+    actionable_games = 0
     correct = 0
     units_won = 0.0
     
     print("="*60)
-    print(f"INICIANDO BACKTEST V17.0: {start_date_str} (+{days} días)")
+    print(f"INICIANDO BACKTEST V17.1: {start_date_str} (+{days} días)")
+    print(f"Filtro de Confianza: > {CONFIDENCE_THRESHOLD*100}%")
     print("="*60)
 
     for i in range(days):
         current_date = (start_date + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
         print(f"\n📅 Procesando Fecha: {current_date}")
         
-        # El loader ahora usa el año dinámico (2025/2026)
+        # El loader ahora usa el año dinámico
         games = predictor.loader.get_schedule(current_date)
         
         for g in games:
@@ -29,36 +34,53 @@ def run_backtest(start_date_str, days=5):
             
             res = predictor.predict_game(g)
             
-            # Si el lineup no estaba confirmado, el modelo devuelve un error (bloqueo de seguridad)
+            # Si hay un error, lo saltamos
             if 'error' in res: continue
             
             total_games += 1
             prediction = res['winner']
             actual_winner = g['real_winner']
-            
-            is_correct = (prediction == actual_winner)
-            if is_correct:
-                correct += 1
-                units_won += 0.95 # Asumiendo cuota promedio de -105 / 1.95
-            else:
-                units_won -= 1.0
-            
-            print(f"  - {g['away_name']} @ {g['home_name']}: {'✅' if is_correct else '❌'} (Pick: {prediction})")
+            confidence = res.get('confidence', 0.5)
 
-    # Reporte de Rendimiento
+            # --- LA LÓGICA DE WALL STREET: Solo operar si hay Edge ---
+            if confidence >= CONFIDENCE_THRESHOLD:
+                actionable_games += 1
+                is_correct = (prediction == actual_winner)
+                
+                if is_correct:
+                    correct += 1
+                    units_won += 0.95 # Asumiendo cuota promedio de -105 / 1.95
+                else:
+                    units_won -= 1.0
+                
+                print(f"  - {g['away_name']} @ {g['home_name']}: {'✅' if is_correct else '❌'} (Pick: {prediction} | Confianza: {confidence*100:.1f}%)")
+            else:
+                print(f"  - {g['away_name']} @ {g['home_name']}: ⏭️ No Bet (Confianza: {confidence*100:.1f}%)")
+
+    # --- REPORTE DE RENDIMIENTO INSTITUCIONAL ---
     if total_games > 0:
-        accuracy = (correct / total_games) * 100
-        roi = (units_won / total_games) * 100
         print("\n" + "="*60)
-        print(f"RESULTADOS FINALES (Arquitectura Statcast V17.0)")
-        print(f"Total Juegos: {total_games}")
-        print(f"Precisión: {accuracy:.1f}%")
-        print(f"Ganancia Neta: {units_won:.2f} Unidades")
-        print(f"ROI Estimado: {roi:.1f}%")
+        print(f"📊 RESULTADOS DEL BACKTEST OUT-OF-SAMPLE V17.1")
         print("="*60)
-    else:
-        print("\n⚠️ No se encontraron juegos válidos para este periodo.")
+        print(f"Juegos Totales Evaluados: {total_games}")
+        print(f"💰 JUEGOS OPERADOS (Confianza > {CONFIDENCE_THRESHOLD*100}%): {actionable_games}")
+        
+        if actionable_games > 0:
+            accuracy = (correct / actionable_games) * 100
+            roi = (units_won / actionable_games) * 100
+            print(f"🎯 ACCURACY EN APUESTAS: {accuracy:.1f}% ({correct}/{actionable_games})")
+            print(f"🏠 BASELINE DEL MERCADO: 50.25% (Aprox)")
+            
+            lift = accuracy - 50.25
+            alpha_signal = "🚀 Señal Alpha Detectada" if lift > 2.5 else "⚠️ Ruido Estadístico"
+            print(f"📈 LIFT REAL DEL MODELO: +{lift:.2f}% ({alpha_signal})")
+            
+            print(f"💵 Ganancia Neta: {units_won:.2f} Unidades")
+            print(f"🏦 ROI Estimado: {roi:.1f}%")
+        else:
+            print("❌ No se encontraron juegos con suficiente confianza para operar.")
+        print("="*60)
 
 if __name__ == "__main__":
-    # 18 de julio de 2025: Reinicio de la temporada tras el All-Star
-    run_backtest("2025-07-18", days=15)
+    # Prueba corriendo finales de Agosto 2024 (Out of sample respecto a la calibración de 2025)
+    run_backtest("2024-08-20", days=10)

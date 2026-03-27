@@ -253,12 +253,13 @@ if games:
             
             st.write("") 
             if st.button("💾 Guardar Predicción en Bitácora", use_container_width=True):
-                guardado = tracker.log_bet(date_str, f"{away} @ {home}", target_team, fav_prob, target_ml, calc['edge_pct'])
+                # AÑADIMOS market_p A LA FUNCIÓN LOG_BET
+                guardado = tracker.log_bet(date_str, f"{away} @ {home}", target_team, fav_prob, market_p, target_ml, calc['edge_pct'])
                 if guardado:
                     st.success("¡Operación registrada en tu historial de operaciones!")
                 else:
                     st.warning("Este juego ya estaba guardado en tu bitácora de hoy.")
-
+                    
         # BLOQUE 3: ESTRUCTURA
         st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
         cf1, cf2 = st.columns(2)

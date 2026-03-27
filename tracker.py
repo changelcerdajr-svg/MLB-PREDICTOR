@@ -6,19 +6,20 @@ FILE = "history_log.csv"
 
 def init_db():
     if not os.path.exists(FILE):
-        df = pd.DataFrame(columns=["Fecha", "Juego", "Pick", "Confianza (%)", "Cuota", "Edge", "Resultado"])
+        # AÑADIMOS LA COLUMNA "Prob Mercado"
+        df = pd.DataFrame(columns=["Fecha", "Juego", "Pick", "Confianza (%)", "Prob Mercado", "Cuota", "Edge", "Resultado"])
         df.to_csv(FILE, index=False)
 
-def log_bet(fecha, juego, pick, confianza, cuota, edge):
+def log_bet(fecha, juego, pick, confianza, prob_mercado, cuota, edge):
     init_db()
     df = pd.read_csv(FILE)
-    # Evitar duplicados del mismo juego el mismo día
     if not ((df['Fecha'] == fecha) & (df['Juego'] == juego)).any():
         new_data = pd.DataFrame([{
             "Fecha": fecha, 
             "Juego": juego, 
             "Pick": pick, 
-            "Confianza (%)": round(confianza, 1), 
+            "Confianza (%)": round(confianza, 1),
+            "Prob Mercado": round(prob_mercado * 100, 1), # NUEVO
             "Cuota": cuota, 
             "Edge": edge,
             "Resultado": "Pendiente"

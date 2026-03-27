@@ -1,15 +1,21 @@
-# train_calibration.py - VERSIÓN DE DIAGNÓSTICO FORZADO V12.2
+# train_calibration.py - V15.6 (Rolling Window 60 Días + Diagnóstico Completo)
 from model import MLBPredictor
 from datetime import datetime, timedelta
 from sklearn.isotonic import IsotonicRegression
 import pickle
 import sys
 
-TRAIN_START = "2024-04-01"
-TRAIN_END = "2024-05-31"
+def get_rolling_window_dates(days=60):
+    # Buffer de 2 días hacia atrás para asegurar que los juegos ya terminaron
+    end = datetime.today() - timedelta(days=2)
+    start = end - timedelta(days=days)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 def train_isotonic_calibrator():
-    print("🛰️ Conectando con MLB StatsAPI...")
+    TRAIN_START, TRAIN_END = get_rolling_window_dates(days=60)
+    print("="*60)
+    print(f"🛰️ INICIANDO CALIBRACIÓN DINÁMICA: {TRAIN_START} al {TRAIN_END}")
+    print("="*60)
     
     predictor = MLBPredictor(use_calibrator=False) 
     loader = predictor.loader
@@ -38,7 +44,7 @@ def train_isotonic_calibrator():
                 
                 print(f"    ⚾ Procesando: {game['away_name']} @ {game['home_name']}...", end=" ")
                 
-                # 2. Extracción de Marcador (Validación V10.1 / V12.2)
+                # 2. Extracción de Marcador
                 try:
                     h_score = game['real_score']['home']
                     a_score = game['real_score']['away']
@@ -63,15 +69,16 @@ def train_isotonic_calibrator():
         current_date += timedelta(days=1)
         print(f"--- Muestras acumuladas: {len(X_raw)} ---")
         
-    if len(X_raw) > 5: # Bajamos el límite solo para la prueba de diagnóstico
+    if len(X_raw) > 30: # Requerimos al menos 30 juegos para que la estadística sirva
         print("\n🔧 Ajustando Regresión Isotónica...")
         iso_reg = IsotonicRegression(out_of_bounds='clip')
         iso_reg.fit(X_raw, y_real)
         with open('isotonic_calibrator.pkl', 'wb') as f:
             pickle.dump(iso_reg, f)
-        print("✅ Calibrador guardado.")
+        print("✅ Calibrador dinámico guardado exitosamente.")
     else:
-        print("\n❌ Error crítico: No se recolectaron suficientes muestras.")
+        print("\n❌ Error: No se recolectaron suficientes muestras (Temporada baja / Off-season).")
+        print("💡 Nota: El calibrador estático actual seguirá funcionando hasta que haya volumen de juegos.")
 
 if __name__ == "__main__":
     train_isotonic_calibrator()

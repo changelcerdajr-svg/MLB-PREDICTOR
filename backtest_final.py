@@ -1,122 +1,88 @@
 # backtest_final.py
-# Auditoría Institucional Out-of-Sample - V13.2 (Filtro de Confianza)
-import sys
-from datetime import datetime, timedelta
+# Auditoría Histórica Final V16.2 (OUT-OF-SAMPLE REAL)
+
 from model import MLBPredictor
+from datetime import datetime, timedelta
 
-# --- CONFIGURACIÓN DEL BACKTEST ---
-START_DATE = "2024-07-01"  
-DAYS_TO_TEST = 60          
-MIN_CONFIDENCE = 0.55      # NUEVO: El modelo solo opera si la confianza es >= 55%
-
-def run_backtest():
-    print("="*50)
-    print(" 🔬 AUDITORÍA INSTITUCIONAL V13.2 (Out-of-Sample)")
-    print(f" 📅 Desde: {START_DATE} | Periodo: {DAYS_TO_TEST} días")
-    print(f" 🎯 Filtro de Confianza (Threshold): {MIN_CONFIDENCE*100}%")
-    print("="*50)
-
-    try:
-        predictor = MLBPredictor()
-        # FIX ESTRUCTURAL: El modo histórico se activa UNA SOLA VEZ para todo el backtest
-        predictor.loader._force_historical_mode = True
-    except Exception as e:
-        print(f"Error inicializando el motor: {e}")
-        return
-
+def run_out_of_sample_backtest():
+    print("="*60)
+    print(" 🔬 INICIANDO BACKTEST OUT-OF-SAMPLE V16.2")
+    print("    (Totalmente desvinculado de la ventana de calibración)")
+    print("="*60)
+    
+    # Ventana de Verano: Julio a Agosto 2024 (Evitando el overfit de Abril/Mayo)
+    START_DATE = "2024-07-01"
+    END_DATE = "2024-08-31" 
+    
+    # Apagamos el calibrador para evaluar el poder crudo del chasis
+    predictor = MLBPredictor(use_calibrator=False) 
+    predictor.loader._force_historical_mode = True 
+    
     current_date = datetime.strptime(START_DATE, "%Y-%m-%d")
+    end_date = datetime.strptime(END_DATE, "%Y-%m-%d")
     
-    # Contadores Maestros
-    total_valid_games = 0
-    rejected_games = 0
+    total_games = 0
+    actionable_games = 0
+    wins = 0
+    home_wins = 0
     
-    # Contadores de Apuestas (Actionable Games)
-    games_bet = 0
-    correct_bets = 0
-    home_wins_in_bets = 0 
-
-    for i in range(DAYS_TO_TEST):
-        test_date = current_date.strftime("%Y-%m-%d")
-        # Imprimimos en la misma línea para no saturar la terminal
-        sys.stdout.write(f"\rProcesando: {test_date}...")
-        sys.stdout.flush()
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y-%m-%d")
+        games = predictor.loader.get_schedule(date_str)
         
-        try:
-            games = predictor.loader.get_schedule(test_date)
-        except Exception as e:
-            current_date += timedelta(days=1)
-            continue
-            
         if not games:
             current_date += timedelta(days=1)
             continue
-
+            
+        print(f"📅 {date_str} [{len(games)} juegos]...", end=" ")
+        
         for game in games:
-            home_score = game['real_score']['home']
-            away_score = game['real_score']['away']
-            
-            if home_score == away_score:
+            if game['status'] not in ['Final', 'Game Over', 'Completed', 'F']:
                 continue
+            try:
+                h_score = game['real_score']['home']
+                a_score = game['real_score']['away']
+                if h_score == a_score: continue
                 
-            real_winner = game['real_winner']
-            
-            # Ejecutamos la predicción
-            res = predictor.predict_game(game)
-            
-            # Compuerta 1: Riesgo (Datos Incompletos)
-            if 'error' in res:
-                rejected_games += 1
-                continue
+                real_winner = game['home_name'] if h_score > a_score else game['away_name']
                 
-            total_valid_games += 1
-            predicted_winner = res['winner']
-            confidence = res['confidence']
-            
-            # Compuerta 2: Filtro de Confianza (El Sniper)
-            if confidence >= MIN_CONFIDENCE:
-                games_bet += 1
+                res = predictor.predict_game(game)
+                if 'error' in res: continue
                 
-                if predicted_winner == real_winner:
-                    correct_bets += 1
-                    
+                total_games += 1
                 if real_winner == game['home_name']:
-                    home_wins_in_bets += 1
-                
-        # Avanzamos al siguiente día
+                    home_wins += 1
+                    
+                if res['confidence'] >= 0.55:
+                    actionable_games += 1
+                    if res['winner'] == real_winner:
+                        wins += 1
+            except Exception: pass
+            
+        print("OK")
         current_date += timedelta(days=1)
         
-    # --- REPORTE FINAL ---
-    print("\n\n" + "="*50)
-    print(" 📊 RESULTADOS OUT-OF-SAMPLE (V13.2)")
-    print("="*50)
+    print("\n" + "="*60)
+    print(" 📊 RESULTADOS DEL BACKTEST OUT-OF-SAMPLE (Julio-Agosto 2024)")
+    print("="*60)
+    print(f"Juegos Totales Evaluados: {total_games}")
     
-    total_games_seen = total_valid_games + rejected_games
-    if total_games_seen > 0:
-        print(f" 🛑 Rechazos por falta de datos: {(rejected_games/total_games_seen)*100:.1f}% ({rejected_games}/{total_games_seen})")
+    if actionable_games > 0:
+        accuracy = wins / actionable_games
+        baseline = home_wins / total_games
+        lift = accuracy - baseline
         
-        ignored_games = total_valid_games - games_bet
-        print(f" 🙈 Juegos ignorados (Baja Confianza < {MIN_CONFIDENCE*100}%): {ignored_games}")
-        print("-" * 50)
+        print(f"💰 JUEGOS OPERADOS (Confianza > 55%): {actionable_games}")
+        print(f"🎯 ACCURACY EN APUESTAS: {accuracy*100:.2f}% ({wins}/{actionable_games})")
+        print(f"🏠 BASELINE DEL MERCADO: {baseline*100:.2f}%")
         
-        if games_bet > 0:
-            accuracy = (correct_bets / games_bet) * 100
-            real_baseline = (home_wins_in_bets / games_bet) * 100
-            real_lift = accuracy - real_baseline
-            
-            print(f" 💰 JUEGOS OPERADOS (Actionable): {games_bet}")
-            print(f" 🎯 ACCURACY EN APUESTAS: {accuracy:.2f}% ({correct_bets}/{games_bet})")
-            print(f" 🏠 BASELINE EN APUESTAS: {real_baseline:.2f}%")
-            print(f" 🚀 LIFT REAL DEL MODELO: {real_lift:+.2f}%")
-            
-            print("-" * 50)
-            if real_lift > 0:
-                print(" ✅ SEÑAL ALPHA CONFIRMADA: El modelo extrae valor real en su zona de confianza.")
-            else:
-                print(" ⚠️ ALERTA: Aún filtrando, el modelo no supera la varianza del mercado.")
+        if lift > 0:
+            print(f"🚀 LIFT REAL DEL MODELO: +{lift*100:.2f}% (Señal Alpha Detectada)")
         else:
-            print(" 📉 El filtro es muy estricto. El modelo no encontró ninguna oportunidad operable.")
+            print(f"⚠️ LIFT NEGATIVO: {lift*100:.2f}% (Ruido en el modelo)")
     else:
-        print(" No se procesó ningún juego.")
+        print("No hubo juegos que superaran el umbral.")
+    print("="*60)
 
 if __name__ == "__main__":
-    run_backtest()
+    run_out_of_sample_backtest()

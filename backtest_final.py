@@ -1,88 +1,64 @@
 # backtest_final.py
-# Auditoría Histórica Final V16.2 (OUT-OF-SAMPLE REAL)
+# Motor de Validación V17.0 (Sincronizado con Statcast + Clima Vectorial)
 
 from model import MLBPredictor
-from datetime import datetime, timedelta
+import datetime
 
-def run_out_of_sample_backtest():
-    print("="*60)
-    print(" 🔬 INICIANDO BACKTEST OUT-OF-SAMPLE V16.2")
-    print("    (Totalmente desvinculado de la ventana de calibración)")
-    print("="*60)
-    
-    # Ventana de Verano: Julio a Agosto 2024 (Evitando el overfit de Abril/Mayo)
-    START_DATE = "2024-07-01"
-    END_DATE = "2024-08-31" 
-    
-    # Apagamos el calibrador para evaluar el poder crudo del chasis
-    predictor = MLBPredictor(use_calibrator=False) 
-    predictor.loader._force_historical_mode = True 
-    
-    current_date = datetime.strptime(START_DATE, "%Y-%m-%d")
-    end_date = datetime.strptime(END_DATE, "%Y-%m-%d")
+def run_backtest(start_date_str, days=5):
+    # Usamos el predictor que ya tiene integrado el Scraper y la calibración
+    predictor = MLBPredictor(use_calibrator=True) 
+    start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
     
     total_games = 0
-    actionable_games = 0
-    wins = 0
-    home_wins = 0
+    correct = 0
+    units_won = 0.0
     
-    while current_date <= end_date:
-        date_str = current_date.strftime("%Y-%m-%d")
-        games = predictor.loader.get_schedule(date_str)
-        
-        if not games:
-            current_date += timedelta(days=1)
-            continue
-            
-        print(f"📅 {date_str} [{len(games)} juegos]...", end=" ")
-        
-        for game in games:
-            if game['status'] not in ['Final', 'Game Over', 'Completed', 'F']:
-                continue
-            try:
-                h_score = game['real_score']['home']
-                a_score = game['real_score']['away']
-                if h_score == a_score: continue
-                
-                real_winner = game['home_name'] if h_score > a_score else game['away_name']
-                
-                res = predictor.predict_game(game)
-                if 'error' in res: continue
-                
-                total_games += 1
-                if real_winner == game['home_name']:
-                    home_wins += 1
-                    
-                if res['confidence'] >= 0.55:
-                    actionable_games += 1
-                    if res['winner'] == real_winner:
-                        wins += 1
-            except Exception: pass
-            
-        print("OK")
-        current_date += timedelta(days=1)
-        
-    print("\n" + "="*60)
-    print(" 📊 RESULTADOS DEL BACKTEST OUT-OF-SAMPLE (Julio-Agosto 2024)")
     print("="*60)
-    print(f"Juegos Totales Evaluados: {total_games}")
-    
-    if actionable_games > 0:
-        accuracy = wins / actionable_games
-        baseline = home_wins / total_games
-        lift = accuracy - baseline
-        
-        print(f"💰 JUEGOS OPERADOS (Confianza > 55%): {actionable_games}")
-        print(f"🎯 ACCURACY EN APUESTAS: {accuracy*100:.2f}% ({wins}/{actionable_games})")
-        print(f"🏠 BASELINE DEL MERCADO: {baseline*100:.2f}%")
-        
-        if lift > 0:
-            print(f"🚀 LIFT REAL DEL MODELO: +{lift*100:.2f}% (Señal Alpha Detectada)")
-        else:
-            print(f"⚠️ LIFT NEGATIVO: {lift*100:.2f}% (Ruido en el modelo)")
-    else:
-        print("No hubo juegos que superaran el umbral.")
+    print(f"INICIANDO BACKTEST V17.0: {start_date_str} (+{days} días)")
     print("="*60)
 
+    for i in range(days):
+        current_date = (start_date + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+        print(f"\n📅 Procesando Fecha: {current_date}")
+        
+        # El loader ahora usa el año dinámico (2025/2026)
+        games = predictor.loader.get_schedule(current_date)
+        
+        for g in games:
+            if g['status'] != 'Final': continue
+            
+            res = predictor.predict_game(g)
+            
+            # Si el lineup no estaba confirmado, el modelo devuelve un error (bloqueo de seguridad)
+            if 'error' in res: continue
+            
+            total_games += 1
+            prediction = res['winner']
+            actual_winner = g['real_winner']
+            
+            is_correct = (prediction == actual_winner)
+            if is_correct:
+                correct += 1
+                units_won += 0.95 # Asumiendo cuota promedio de -105 / 1.95
+            else:
+                units_won -= 1.0
+            
+            print(f"  - {g['away_name']} @ {g['home_name']}: {'✅' if is_correct else '❌'} (Pick: {prediction})")
+
+    # Reporte de Rendimiento
+    if total_games > 0:
+        accuracy = (correct / total_games) * 100
+        roi = (units_won / total_games) * 100
+        print("\n" + "="*60)
+        print(f"RESULTADOS FINALES (Arquitectura Statcast V17.0)")
+        print(f"Total Juegos: {total_games}")
+        print(f"Precisión: {accuracy:.1f}%")
+        print(f"Ganancia Neta: {units_won:.2f} Unidades")
+        print(f"ROI Estimado: {roi:.1f}%")
+        print("="*60)
+    else:
+        print("\n⚠️ No se encontraron juegos válidos para este periodo.")
+
 if __name__ == "__main__":
-    run_out_of_sample_backtest()
+    # 18 de julio de 2025: Reinicio de la temporada tras el All-Star
+    run_backtest("2025-07-18", days=15)

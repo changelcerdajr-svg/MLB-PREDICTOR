@@ -10,14 +10,20 @@ SIMULATION_ROUNDS = 10000     # Optimizado (Reemplaza los 100k innecesarios)
 STRESS_TEST_ROUNDS = 2000     # Para el cálculo de Sensibilidad
 
 # 3. FACTORES DE PARQUE (30 Equipos MLB - Carreras Totales)
+# Factores de Estadio Reales (Park Factors 2024)
+# > 1.00 = Favorece Carreras | < 1.00 = Favorece Pitcheo
 PARK_FACTORS = {
     'runs': {
-        19: 1.35, 1: 0.96, 2: 0.99, 3: 1.08, 4: 1.01, 5: 1.00, 
-        7: 0.99, 10: 0.96, 12: 0.92, 14: 1.02, 15: 1.00, 17: 1.02, 
-        22: 0.98, 31: 0.97, 32: 0.99, 33: 0.98, 110: 0.92, 147: 1.04, 
-        238: 1.05, 268: 0.98, 3289: 0.95, 2889: 1.02, 3309: 0.99, 
-        3313: 1.01, 143: 0.99, 175: 1.01, 288: 0.99, 239: 1.00, 
-        134: 0.98, 113: 1.06
+        19: 1.35, # Coors Field (COL) - El más extremo
+        18: 1.12, # Great American Ball Park (CIN)
+        32: 1.05, # Yankee Stadium (NYY)
+        17: 1.04, # Wrigley Field (CHC)
+        9:  1.02, # Fenway Park (BOS)
+        10: 0.98, # Rogers Centre (TOR)
+        31: 0.96, # Citi Field (NYM)
+        24: 0.94, # Oracle Park (SF)
+        11: 0.91, # T-Mobile Park (SEA) - El más difícil para batear
+        3:  0.89, # Tropicana Field (TB)
     }
 }
 
@@ -57,5 +63,5 @@ STADIUM_COORDS = {
 }
 
 # 5. FECHA
-USE_REAL_TIME = False
-TEST_DATE = "2026-03-25"
+USE_REAL_TIME = True  # Cámbialo a False si quieres usar una fecha de prueba
+TEST_DATE = "2026-03-27" # Esta es la fecha que usará el modelo si USE_REAL_TIME es False

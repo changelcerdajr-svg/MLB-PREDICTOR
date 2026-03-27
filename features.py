@@ -7,9 +7,37 @@ from config import PARK_FACTORS
 
 # Base empírica de orientaciones (Grados desde el Norte geográfico hacia el CF)
 STADIUM_AZIMUTHS = {
-    1: 45, 2: 45, 3: 180, 5: 45, 7: 135, 8: 135, 9: 45, 10: 45, 
-    11: 135, 12: 135, 13: 45, 14: 45, 15: 0, 17: 45, 18: 90, 19: 0, 
-    21: 45, 22: 180, 24: 90, 28: 135, 31: 45, 32: 65, 33: 340,
+    1: 45,    # Angel Stadium (NE)
+    2: 45,    # Oriole Park (NE)
+    3: 180,   # Tropicana Field (S - Domo)
+    5: 45,    # Progressive Field (NE)
+    7: 135,   # Kauffman Stadium (SE)
+    8: 135,   # Comerica Park (SE)
+    9: 45,    # Fenway Park (NE)
+    10: 45,   # Rogers Centre (NE)
+    11: 135,  # T-Mobile Park (SE)
+    12: 135,  # Guaranteed Rate Field (SE)
+    13: 45,   # Target Field (NE)
+    14: 45,   # Oakland Coliseum (NE)
+    15: 0,    # Chase Field (N)
+    16: 90,   # Truist Park (E)
+    17: 45,   # Wrigley Field (NE)
+    18: 90,   # Great American Ball Park (E)
+    19: 0,    # Coors Field (N)
+    20: 45,   # Miller Park (NE)
+    21: 45,   # Citizens Bank Park (NE)
+    22: 180,  # Dodger Stadium (S)
+    23: 135,  # Nationals Park (SE)
+    24: 90,   # Oracle Park (E)
+    25: 45,   # Petco Park (NE)
+    26: 45,   # Busch Stadium (NE)
+    27: 45,   # Globe Life Field (NE)
+    28: 135,  # Truist Park (SE)
+    29: 45,   # Marlins Park (NE)
+    30: 135,  # PNC Park (SE)
+    31: 45,   # Citi Field (NE)
+    32: 65,   # Yankee Stadium (ENE)
+    33: 340,  # Minute Maid Park (NNW)
 }
 
 class FeatureEngine:

@@ -1,93 +1,89 @@
 # statcast_scraper.py
-# Módulo de Extracción de Baseball Savant (Expected Statistics)
+# Motor de Extracción V17.1 (Organización de Directorios)
 
 import pandas as pd
 import requests
 import io
+import os
 
 class StatcastScraper:
     def __init__(self):
-        # Disfrazamos a nuestro bot como un navegador web normal
+        self.base_url = "https://baseballsavant.mlb.com/leaderboard/expected_statistics"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        self.batters_cache = None
-        self.pitchers_cache = None
-        self.current_year = None
-
-    def _fetch_savant_data(self, player_type, year):
-        """
-        Descarga el CSV oculto de Baseball Savant y lo convierte en un DataFrame.
-        player_type: 'batter' o 'pitcher'
-        """
-        print(f"🛰️ Descargando radares de {player_type}s ({year}) desde Baseball Savant...")
-        url = f"https://baseballsavant.mlb.com/leaderboard/expected_statistics?type={player_type}&year={year}&position=&team=&min=1&csv=true"
+        self.data_dir = "data_statcast" # Carpeta centralizada
+        self.batters_cache = {}
+        self.pitchers_cache = {}
         
-        try:
-            response = requests.get(url, headers=self.headers, timeout=15)
-            response.raise_for_status()
-            
-            # Leemos el texto del CSV directamente a la memoria de Pandas
-            df = pd.read_csv(io.StringIO(response.text))
-            
-            # Limpiamos el DataFrame para que el ID sea el índice principal
-            df.set_index('player_id', inplace=True)
-            return df
-            
-        except Exception as e:
-            print(f"❌ Error al conectar con Savant: {e}")
-            return None
+        # Crear la carpeta si no existe
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir)
 
-    def load_season_data(self, year):
-        """Carga ambas tablas en memoria para consultas ultra-rápidas."""
-        if self.current_year != year or self.batters_cache is None:
-            self.batters_cache = self._fetch_savant_data('batter', year)
-            self.pitchers_cache = self._fetch_savant_data('pitcher', year)
-            self.current_year = year
+    def fetch_batters(self, year):
+        url = f"{self.base_url}?type=batter&year={year}&position=&team=&min=1&csv=true"
+        try:
+            r = requests.get(url, headers=self.headers, timeout=10)
+            if r.status_code == 200:
+                df = pd.read_csv(io.StringIO(r.text))
+                file_path = os.path.join(self.data_dir, f"batters_{year}.csv")
+                df.to_csv(file_path, index=False)
+                self.batters_cache[year] = df.set_index('player_id')['est_woba'].to_dict()
+                return True
+        except Exception as e:
+            print(f"Error descargando batters {year}: {e}")
+        return False
+
+    def fetch_pitchers(self, year):
+        url = f"{self.base_url}?type=pitcher&year={year}&position=&team=&min=1&csv=true"
+        try:
+            r = requests.get(url, headers=self.headers, timeout=10)
+            if r.status_code == 200:
+                df = pd.read_csv(io.StringIO(r.text))
+                
+                # Buscador dinámico de columna xERA (xera o est_era)
+                possible_cols = ['xera', 'est_era', 'expected_era']
+                target_col = next((c for c in possible_cols if c in df.columns), None)
+                
+                if target_col:
+                    file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
+                    df.to_csv(file_path, index=False)
+                    self.pitchers_cache[year] = df.set_index('player_id')[target_col].to_dict()
+                    return True
+        except Exception as e:
+            print(f"Error descargando pitchers {year}: {e}")
+        return False
 
     def get_batter_xwoba(self, player_id, year):
-        """Devuelve el xwOBA real basado en la física del batazo."""
-        self.load_season_data(year)
-        if self.batters_cache is not None and player_id in self.batters_cache.index:
-            try:
-                # Extraemos la columna 'est_woba' (Expected wOBA)
-                return float(self.batters_cache.loc[player_id, 'est_woba'])
-            except: pass
-        return None # Retorna None si el jugador no existe ese año
+        if year not in self.batters_cache:
+            file_path = os.path.join(self.data_dir, f"batters_{year}.csv")
+            if os.path.exists(file_path):
+                df = pd.read_csv(file_path)
+                self.batters_cache[year] = df.set_index('player_id')['est_woba'].to_dict()
+            else:
+                self.fetch_batters(year)
+        return self.batters_cache.get(year, {}).get(player_id)
 
     def get_pitcher_xera(self, player_id, year):
-        """Devuelve el xERA real basado en la calidad del contacto permitido."""
-        self.load_season_data(year)
-        if self.pitchers_cache is not None and player_id in self.pitchers_cache.index:
-            try:
-                # Extraemos 'est_ba' (xBA), 'est_slg' (xSLG), o xwOBA para derivar xERA.
-                # Savant no entrega xERA directo en este CSV, pero xwOBA es perfectamente equivalente para pitchers.
-                # Lo convertimos a una escala de ERA (Aprox: xwOBA * 13 - 0.5)
-                pitcher_xwoba = float(self.pitchers_cache.loc[player_id, 'est_woba'])
-                xera_approx = (pitcher_xwoba * 12.5) - 0.2
-                return round(xera_approx, 2)
-            except: pass
-        return None
+        if year not in self.pitchers_cache:
+            file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
+            if os.path.exists(file_path):
+                df = pd.read_csv(file_path)
+                possible_cols = ['xera', 'est_era', 'expected_era']
+                target_col = next((c for c in possible_cols if c in df.columns), None)
+                if target_col:
+                    self.pitchers_cache[year] = df.set_index('player_id')[target_col].to_dict()
+            else:
+                self.fetch_pitchers(year)
+        return self.pitchers_cache.get(year, {}).get(player_id)
 
-# --- ZONA DE PRUEBAS ---
 if __name__ == "__main__":
-    print("="*50)
-    print(" PRUEBA DE MOTOR STATCAST (BASEBALL SAVANT)")
-    print("="*50)
-    
     scraper = StatcastScraper()
-    
-    # Pruebas con datos de 2024
-    YEAR = 2024
-    
-    # ID de Aaron Judge (Bateador Élite)
-    judge_id = 592450
-    judge_xwoba = scraper.get_batter_xwoba(judge_id, YEAR)
-    print(f"⚾ Aaron Judge (ID: {judge_id}) -> xwOBA {YEAR}: {judge_xwoba}")
-    
-    # ID de Tarik Skubal (Pitcher Élite)
-    skubal_id = 669373
-    skubal_xera = scraper.get_pitcher_xera(skubal_id, YEAR)
-    print(f"⚾ Tarik Skubal (ID: {skubal_id}) -> xERA {YEAR}: {skubal_xera}")
-    
     print("="*50)
+    print("SINCRONIZACIÓN DE DATOS EN CARPETA 'data_statcast'")
+    print("="*50)
+    
+    for y in [2024, 2025, 2026]:
+        print(f"🛰️ Procesando temporada {y}...")
+        if scraper.fetch_batters(y) and scraper.fetch_pitchers(y):
+            print(f"✅ Temporada {y} lista.")

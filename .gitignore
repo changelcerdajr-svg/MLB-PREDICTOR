@@ -1,16 +1,23 @@
-# Python
+# --- Python & Sistema ---
 __pycache__/
 *.pyc
 .env
-
-# Datos y Logs
-mlb_history_log.csv
-logs.txt
-
-# Entornos virtuales
+.DS_Store
+Thumbs.db
 venv/
 env/
 
-# Archivos de sistema
-.DS_Store
-Thumbs.db
+# --- Modelos y Calibración (ESTO SÍ SE SUBE) ---
+# No ignoramos .pkl para que el calibrador viaje entre computadoras
+# !isotonic_calibrator.pkl 
+
+# --- Datos Pesados (ESTO NO SE SUBE) ---
+# Ignoramos la carpeta de statcast para no saturar GitHub
+# La Computadora B deberá correr el scraper una vez
+data_statcast/
+*.csv
+
+# --- Logs y Resultados ---
+mlb_history_log.csv
+logs.txt
+backtest_results/

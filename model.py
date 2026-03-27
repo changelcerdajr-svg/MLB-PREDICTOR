@@ -87,9 +87,10 @@ class MLBPredictor:
         a_def_ra9 = self.engine.calculate_defense_score(a_pstats, a_bullpen, a_fatigue, a_fielding)
 
         # 8. Simulación Estocástica Principal
+        # VMR Ajustado: Reduce la varianza en duelos de pitchers élite (K/9 > 9.0)
+        # Si el K/9 promedio es 10.0, la varianza baja un 5%, haciendo la simulación más estable
         avg_k9 = (h_pstats['k9'] + a_pstats['k9']) / 2.0
-        k9_vmr_adj = 1.0 + ((7.5 - avg_k9) * 0.02)
-
+        k9_vmr_adj = 1.0 + ((8.0 - avg_k9) * 0.025) # Calibración refinada
         win_prob, h_runs, a_runs, _ = self.engine.run_monte_carlo_simulation(
             h_pow=h_power, h_def=h_def_ra9, 
             a_pow=a_power, a_def=a_def_ra9, 

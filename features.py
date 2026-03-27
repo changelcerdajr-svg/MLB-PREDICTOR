@@ -78,7 +78,7 @@ class FeatureEngine:
         a_lambda = (a_pow * h_def_scalar) * 0.96
         
         # 3. VMR Empírico (Anclado a 1.8)
-        target_vmr = 1.8 * pf 
+        target_vmr = 1.8 * pf * max(0.92, min(1.08, k9_adj)) 
         
         # 4. Función de muestreo Binomial Negativa
         def nbinom_sample(mu, vmr, size):

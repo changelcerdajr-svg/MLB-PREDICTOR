@@ -1,5 +1,5 @@
 # app.py
-# MLB Quant Engine - Web Interface V15.1 (UI theScore Style)
+# MLB Quant Engine - Web Interface V15.3 (Full theScore UI + Tracker)
 
 import streamlit as st
 import datetime
@@ -7,6 +7,7 @@ import time
 from market_scraper import get_live_market_odds
 from model import MLBPredictor
 from financial import american_to_prob, remove_vig, calculate_edge
+import tracker # Importamos el gestor de bitácora
 
 st.set_page_config(page_title="MLB Quant Engine", page_icon="⚾", layout="wide", initial_sidebar_state="expanded")
 
@@ -14,11 +15,9 @@ st.set_page_config(page_title="MLB Quant Engine", page_icon="⚾", layout="wide"
 st.markdown("""
 <style>
     /* Fondos y Tarjetas */
-    .card-deportiva {
-        background-color: #1C1C1E; padding: 18px; border-radius: 16px; border: 1px solid #2C2C2E; height: 100%; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-    }
+    .card-deportiva { background-color: #1C1C1E; padding: 18px; border-radius: 16px; border: 1px solid #2C2C2E; height: 100%; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
     
-    /* Badges (Etiquetas) con tipografía más agresiva y deportiva */
+    /* Badges (Etiquetas) */
     .badge-blue { background-color: #0066FF; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
     .badge-green { background-color: #19B664; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
     .badge-red { background-color: #FF3333; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -29,7 +28,7 @@ st.markdown("""
     .ev-container-positive { border-left: 6px solid #19B664; background-color: #14221A; padding: 20px; border-radius: 0 16px 16px 0; margin-top: 15px; }
     .ev-container-neutral { border-left: 6px solid #2C2C2E; background-color: #1C1C1E; padding: 20px; border-radius: 0 16px 16px 0; margin-top: 15px; }
     
-    /* Botón de Acción Principal (Azul theScore) */
+    /* Botón de Acción Principal */
     .action-bar { background-color: #0066FF; color: white; padding: 18px; border-radius: 14px; text-align: center; font-size: 1.15em; font-weight: 900; margin-top: 20px; box-shadow: 0 4px 15px rgba(0, 102, 255, 0.35); letter-spacing: 0.5px;}
     
     /* Tipografía de Métricas */
@@ -41,7 +40,7 @@ st.markdown("""
     .prob-bar-bg { background-color: #2C2C2E; border-radius: 6px; width: 100%; height: 10px; margin-top: 12px; overflow: hidden; }
     .prob-bar-fill { background-color: #0066FF; height: 100%; border-radius: 6px; }
     
-    /* Puntos de Estatus (Con sombra para efecto "LED" en vivo) */
+    /* Puntos de Estatus */
     .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
     .dot-live { background-color: #FF3333; box-shadow: 0 0 8px rgba(255,51,51,0.8); }
     .dot-final { background-color: #19B664; }
@@ -95,7 +94,7 @@ with st.spinner(f'Extrayendo pizarra...'):
     except: games = []
 
 if not games:
-    st.warning(f"No hay juegos programados.")
+    st.warning(f"No hay juegos programados para el {date_str}.")
 else:
     if 'selected_game_id' not in st.session_state or st.session_state.get('last_date') != date_str:
         st.session_state.selected_game_id = games[0]['id']
@@ -139,6 +138,7 @@ else:
     if 'error' in res:
         st.markdown(f"<div class='badge-red' style='padding:20px; font-size:1.1em; border-radius:12px;'>Error Crítico: {res['error']}</div>", unsafe_allow_html=True)
     else:
+        # BLOQUE 1: PROBABILIDADES Y MARCADOR
         c1, c2, c3 = st.columns(3)
         fav_prob = max(res['home_prob'], res['away_prob']) * 100
         fav_team = home if res['home_prob'] > res['away_prob'] else away
@@ -177,6 +177,7 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
+        # BLOQUE 2: VEREDICTO FINANCIERO Y KELLY
         st.markdown("<hr class='section-divider'><div class='section-title'>Veredicto Financiero</div>", unsafe_allow_html=True)
         
         official_home = home.lower()
@@ -224,13 +225,23 @@ else:
         </div>
         """, unsafe_allow_html=True)
         
+        # --- BOTÓN DE GUARDADO (TRACKER) ---
         if is_positive:
             st.markdown(f"""
             <div class='action-bar'>
                 Apostar a {target_team} ML ({target_ml}) <span style='font-weight:normal; font-size:0.85em; margin-left:12px; color:rgba(255,255,255,0.7);'>| The Odds API</span>
             </div>
             """, unsafe_allow_html=True)
+            
+            st.write("") # Espaciador
+            if st.button("💾 Guardar Predicción en Bitácora", use_container_width=True):
+                guardado = tracker.log_bet(date_str, f"{away} @ {home}", target_team, fav_prob, target_ml, calc['edge_pct'])
+                if guardado:
+                    st.success("¡Operación registrada en tu historial de operaciones!")
+                else:
+                    st.warning("Este juego ya estaba guardado en tu bitácora de hoy.")
 
+        # BLOQUE 3: ESTRUCTURA (RESTAURADO)
         st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
         cf1, cf2 = st.columns(2)
         with cf1:
@@ -255,3 +266,29 @@ else:
                 </table>
             </div>
             """, unsafe_allow_html=True)
+
+        # --- SECCIÓN DEL TRACK RECORD (ESTADÍSTICAS) ---
+        st.markdown("<hr class='section-divider'><div class='section-title'>📊 Tu Récord Histórico</div>", unsafe_allow_html=True)
+        
+        df_log = tracker.load_tracker()
+        
+        if not df_log.empty:
+            ganados = len(df_log[df_log['Resultado'] == 'Ganado'])
+            perdidos = len(df_log[df_log['Resultado'] == 'Perdido'])
+            total_cerrados = ganados + perdidos
+            win_rate = (ganados / total_cerrados * 100) if total_cerrados > 0 else 0
+            
+            c_t1, c_t2, c_t3 = st.columns(3)
+            c_t1.metric("Win Rate Real", f"{win_rate:.1f}%")
+            c_t2.metric("Ganados", ganados)
+            c_t3.metric("Perdidos", perdidos)
+            
+            st.caption("Haz doble clic en la columna 'Resultado' para marcar tus juegos como 'Ganado' o 'Perdido'.")
+            
+            edited_df = st.data_editor(df_log, use_container_width=True, hide_index=True)
+            
+            if st.button("Actualizar Historial", use_container_width=True):
+                tracker.update_tracker(edited_df)
+                st.success("Base de datos actualizada correctamente. Recarga la página para ver tu nuevo Win Rate.")
+        else:
+            st.info("Aún no tienes operaciones. Cuando el modelo detecte un Edge positivo, guárdalo aquí.")

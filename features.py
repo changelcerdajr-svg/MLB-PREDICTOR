@@ -1,5 +1,5 @@
 # features.py
-# Motor Cuantitativo V12.2 (Física Corregida y Blindaje de Tipos)
+# Motor Cuantitativo V15.6 (Física Corregida, Blindaje y VMR Dinámico)
 
 import numpy as np
 from config import PARK_FACTORS
@@ -65,11 +65,12 @@ class FeatureEngine:
         final_ra9 = (prevention_score * ff_value) + capped_fatigue
         return max(2.0, final_ra9)
     
-    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00):
+    # AQUI ESTABA EL ERROR: Agregamos k9_adj=1.0 a los parámetros de entrada
+    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, k9_adj=1.0):
         """
-        Motor Estocástico V12.0 con VMR 1.8.
+        Motor Estocástico V15.6 con VMR Dinámico basado en Ponches (K/9).
         """
-        # 1. EL BUG FATAL CORREGIDO: Cruzamos Ofensiva vs Defensa RIVAL
+        # 1. Cruzamos Ofensiva vs Defensa RIVAL
         a_def_scalar = a_def / league_avg_runs
         h_def_scalar = h_def / league_avg_runs
 
@@ -77,7 +78,7 @@ class FeatureEngine:
         h_lambda = (h_pow * a_def_scalar) * 1.04 
         a_lambda = (a_pow * h_def_scalar) * 0.96
         
-        # 3. VMR Empírico (Anclado a 1.8)
+        # 3. VMR Dinámico anclado a 1.8 pero ajustado por K/9
         target_vmr = 1.8 * pf * max(0.92, min(1.08, k9_adj)) 
         
         # 4. Función de muestreo Binomial Negativa

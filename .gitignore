@@ -7,17 +7,19 @@ Thumbs.db
 venv/
 env/
 
-# --- Modelos y Calibración (ESTO SÍ SE SUBE) ---
-# No ignoramos .pkl para que el calibrador viaje entre computadoras
-# !isotonic_calibrator.pkl 
+# --- Modelos y Calibración ---
+# Quitamos el '#' de la siguiente línea para forzar que el calibrador SÍ se suba
+!isotonic_calibrator.pkl 
 
-# --- Datos Pesados (ESTO NO SE SUBE) ---
-# Ignoramos la carpeta de statcast para no saturar GitHub
-# La Computadora B deberá correr el scraper una vez
-data_statcast/
-*.csv
+# --- Datos Pesados (Sincronizados por el Robot) ---
+# IMPORTANTE: Si quieres que el GitHub Action guarde los CSV, 
+# NO debes ignorar 'data_statcast/'. 
+# Por eso dejamos estas líneas comentadas con '#' abajo:
 
-# --- Logs y Resultados ---
+# data_statcast/
+# *.csv
+
+# --- Logs y Resultados Locales ---
 mlb_history_log.csv
 logs.txt
 backtest_results/

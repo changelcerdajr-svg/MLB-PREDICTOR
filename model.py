@@ -78,9 +78,18 @@ class MLBPredictor:
         
         pf = self.engine.get_park_factor(game['venue_id'])
 
-        # 7. Cálculo de Scores Base
-        h_power = self.engine.calculate_power_score(h_xwoba_adj, pf, league_avg_runs, game['home_id'], game['date'], schedule_df) * h_streak_mult
-        a_power = self.engine.calculate_power_score(a_xwoba_adj, pf, league_avg_runs, game['away_id'], game['date'], schedule_df) * a_streak_mult
+        # 7. Cálculo de Scores Base con Termodinámica Vectorial
+        weather_data = self.loader.get_weather(game['venue_id'])
+        
+        h_power = self.engine.calculate_power_score(
+            h_xwoba_adj, pf, league_avg_runs, game['home_id'], 
+            game['date'], schedule_df, weather_data, game['venue_id']
+        ) * h_streak_mult
+        
+        a_power = self.engine.calculate_power_score(
+            a_xwoba_adj, pf, league_avg_runs, game['away_id'], 
+            game['date'], schedule_df, weather_data, game['venue_id']
+        ) * a_streak_mult
         
         h_def_ra9 = self.engine.calculate_defense_score(h_pstats, h_bullpen, h_fatigue, h_fielding)
         a_def_ra9 = self.engine.calculate_defense_score(a_pstats, a_bullpen, a_fatigue, a_fielding)

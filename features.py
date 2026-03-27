@@ -1,8 +1,18 @@
 # features.py
-# Motor Cuantitativo V16.0 (Física Corregida para Statcast: xwOBA y xERA)
+# Motor Cuantitativo V16.1 (Statcast + Termodinámica y Clima Vectorial)
 
 import numpy as np
+import math
 from config import PARK_FACTORS
+
+# La MLB sugiere que los estadios apunten al Este-Noreste (45 grados) para evitar el sol.
+# Usamos 45 como base, y ajustamos para estadios con variaciones extremas.
+STADIUM_AZIMUTHS = {
+    15: 0,    # Chase Field (N)
+    17: 45,   # Wrigley Field (NE)
+    11: 135,  # T-Mobile Park (SE)
+    3: 180,   # Tropicana Field (S - Domo, el clima se anula después)
+}
 
 class FeatureEngine:
     
@@ -10,21 +20,60 @@ class FeatureEngine:
     def get_park_factor(venue_id):
         return PARK_FACTORS['runs'].get(venue_id, 1.00)
 
-    def calculate_power_score(self, xwoba, park_factor, league_avg_runs, team_id, game_date, schedule_data):
+    def calculate_weather_multiplier(self, venue_id, weather_data):
         """
-        Calcula el Poder Ofensivo Puro basado en Calidad de Contacto (xwOBA)
+        Analiza termodinámica y el vector de viento efectivo usando trigonometría.
+        """
+        if not weather_data: 
+            return 1.0
+
+        temp_c = weather_data.get('temperature', 21.0)
+        wind_speed_kmh = weather_data.get('windspeed', 0.0)
+        wind_dir = weather_data.get('winddirection', 0.0)
+
+        # 1. Termodinámica: Base 21°C. +1°C = +0.4% incremento en carreraje (menor densidad del aire)
+        temp_adj = 1.0 + ((temp_c - 21.0) * 0.004)
+
+        # 2. Vector de Viento: Convertir km/h a mph
+        wind_speed_mph = wind_speed_kmh / 1.609
+        
+        # El viento viene "DESDE" una dirección. Calculamos hacia DÓNDE sopla.
+        blowing_to = (wind_dir + 180) % 360
+        
+        # Orientación del estadio (Azimut). Si no está en dict, asumimos NE (45°)
+        azimuth = STADIUM_AZIMUTHS.get(venue_id, 45)
+        
+        # Ángulo de impacto: Diferencia en radianes
+        angle_rad = math.radians(blowing_to - azimuth)
+        
+        # Viento Efectivo (Positivo = hacia afuera, Negativo = hacia adentro)
+        effective_wind = wind_speed_mph * math.cos(angle_rad)
+
+        # Impacto: 1 mph de viento de cola = +1.5% carreraje esperado
+        wind_adj = 1.0 + (effective_wind * 0.015)
+
+        # 3. Multiplicador Total Blindado (Límites para evitar ruido excesivo)
+        total_adj = max(0.85, min(1.20, temp_adj * wind_adj))
+        return total_adj
+
+    def calculate_power_score(self, xwoba, park_factor, league_avg_runs, team_id, game_date, schedule_data, weather_data=None, venue_id=1):
+        """
+        Calcula el Poder Ofensivo Puro basado en Calidad de Contacto y Termodinámica.
         """
         try:
             pf_value = float(park_factor)
         except (TypeError, ValueError):
             pf_value = 1.0
 
-        # Lógica Statcast
+        # Física Atmosférica
+        weather_multiplier = self.calculate_weather_multiplier(venue_id, weather_data)
+
+        # Lógica Statcast ajustada por clima y estadio
         league_xwoba_base = 0.315
         xwoba_scale = xwoba / league_xwoba_base
         base_runs = xwoba_scale * league_avg_runs
         
-        base_score = base_runs * pf_value
+        base_score = base_runs * pf_value * weather_multiplier
 
         try:
             import experiments
@@ -36,9 +85,6 @@ class FeatureEngine:
         return final_score
 
     def calculate_defense_score(self, p_stats, bullpen_stats, fatigue, fielding_factor):
-        """
-        Calcula el Prevención de Carreras usando Statcast xERA.
-        """
         starter_xera = p_stats.get('xera', 4.00) if p_stats else 4.00
         bullpen_era = bullpen_stats.get('era', 4.10) if bullpen_stats else 4.10
         

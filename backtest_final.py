@@ -90,4 +90,4 @@ def run_backtest(start_date_str, days=5):
 
 if __name__ == "__main__":
     # Prueba corriendo finales de Agosto 2024 (Out of sample respecto a la calibración de 2025)
-    run_backtest("2024-08-20", days=10)
+    run_backtest("2024-08-20", days=100)

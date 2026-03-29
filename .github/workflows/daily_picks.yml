@@ -1,0 +1,33 @@
+name: Bot Diario MLB V17.2
+
+on:
+  schedule:
+    # Se ejecuta todos los días a las 16:00 UTC (10:00 AM hora del centro de México)
+    - cron: '0 16 * * *'
+  workflow_dispatch: # Este botón te permite correrlo manualmente desde GitHub cuando quieras
+
+jobs:
+  mlb-predictions:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install scikit-learn pandas cloudscraper beautifulsoup4 requests
+
+      - name: Ejecutar Scraper de Momios
+        run: python live_odds_scraper.py
+        continue-on-error: true # Si Cloudflare lo bloquea, que no detenga todo el proceso
+
+      - name: Correr Modelo y Generar Picks
+        run: python run_daily_picks.py

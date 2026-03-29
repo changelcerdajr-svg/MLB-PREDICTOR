@@ -8,18 +8,20 @@ venv/
 env/
 
 # --- Modelos y Calibración ---
-# Quitamos el '#' de la siguiente línea para forzar que el calibrador SÍ se suba
+# Bloqueamos todos los modelos pesados, EXCEPTO nuestro calibrador oficial
+*.pkl
 !isotonic_calibrator.pkl 
 
 # --- Datos Pesados (Sincronizados por el Robot) ---
-# IMPORTANTE: Si quieres que el GitHub Action guarde los CSV, 
-# NO debes ignorar 'data_statcast/'. 
-# Por eso dejamos estas líneas comentadas con '#' abajo:
+# Bloqueo absoluto al dataset histórico gigante para no romper GitHub
+data_odds/mlb_odds_dataset.json
+mlb_odds_dataset.json
 
-# data_statcast/
-# *.csv
+# (NO ignoramos data_statcast/ para que el robot tenga los CSVs)
 
 # --- Logs y Resultados Locales ---
+history_log.csv
 mlb_history_log.csv
 logs.txt
 backtest_results/
+debug_vegasinsider.html

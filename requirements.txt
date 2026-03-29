@@ -4,4 +4,6 @@ pandas
 numpy
 scipy
 scikit-learn
-python-dotenv
+python-dotenvcloudscraper 
+beautifulsoup4 
+cloudscraper 

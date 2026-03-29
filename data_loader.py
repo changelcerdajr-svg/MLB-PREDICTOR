@@ -78,6 +78,7 @@ class MLBDataLoader:
                         'away_pitcher': a_pitcher,
                         'real_winner': None
                     }
+                    
                     if game_info['status'] == 'Final':
                         h_score = g['teams']['home'].get('score', 0)
                         a_score = g['teams']['away'].get('score', 0)
@@ -160,6 +161,7 @@ class MLBDataLoader:
         return default
 
     def get_pitcher_xera_stats(self, player_id, year=None):
+        import datetime
         if year is None:
             year = getattr(self, 'current_season_year', datetime.date.today().year)
             
@@ -179,16 +181,29 @@ class MLBDataLoader:
                 current_ip = float(s.get('inningsPitched', 0.0))
                 current_k9 = float(s.get('strikeoutsPer9Inn', 7.5))
                 
-        # Aplicamos el Shrinkage usando los innings reales
-        base_xera = raw_xera if raw_xera is not None else LEAGUE_AVG_XERA
+        # --- INICIO DE LA CORRECCIÓN CRÍTICA (Prior Bayesiano) ---
+        
+        # 1. Buscamos el rendimiento histórico real de este pitcher específico
+        prior_xera = self._get_prior_stats(player_id, 'pitching')
+        
+        # 2. Definimos su nivel actual. Si no hay datos de este año, asumimos su histórico.
+        base_xera = raw_xera if raw_xera is not None else prior_xera
+        
+        # 3. Red de seguridad: Solo si es un novato absoluto sin histórico, usamos la media de la liga.
+        safe_prior = prior_xera if prior_xera is not None else LEAGUE_AVG_XERA
+        safe_base = base_xera if base_xera is not None else LEAGUE_AVG_XERA
         
         if current_ip > 0:
-            final_xera = (K_PITCHER_XERA * LEAGUE_AVG_XERA + base_xera * current_ip) / (K_PITCHER_XERA + current_ip)
+            # 4. El Shrinkage ahora "jala" el xERA del año actual hacia el xERA HISTÓRICO del pitcher, no a 4.00
+            final_xera = ((K_PITCHER_XERA * safe_prior) + (safe_base * current_ip)) / (K_PITCHER_XERA + current_ip)
         else:
-            final_xera = base_xera
+            # Si no ha lanzado ni un solo inning este año, su nivel esperado es su histórico
+            final_xera = safe_base
+            
+        # --- FIN DE LA CORRECCIÓN ---
             
         return {'xera': final_xera, 'k9': current_k9}
-
+    
     def get_confirmed_lineup_xwoba(self, game_pk, team_type):
         try:
             box = self._get(f"game/{game_pk}/boxscore")

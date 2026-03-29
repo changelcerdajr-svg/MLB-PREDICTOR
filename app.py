@@ -161,7 +161,7 @@ else:
                         """, unsafe_allow_html=True)
                         
                         # Botón para registrar rápido en el tracker
-                        if st.button(f"📝 Registrar Apuesta", key=f"btn_{g['game_pk']}"):
+                        if st.button(f"📝 Registrar Apuesta", key=f"btn_{g['home_name']}"):
                             saved = tracker.log_bet(
                                 fecha=today_str,
                                 juego=f"{g['away_name']} @ {g['home_name']}",

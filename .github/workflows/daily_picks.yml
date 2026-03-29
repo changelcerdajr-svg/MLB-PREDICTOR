@@ -1,10 +1,13 @@
-name: Bot Diario MLB V17.2
+name: Bot Diario MLB V17.3
 
 on:
   schedule:
-    # Se ejecuta todos los días a las 16:00 UTC (10:00 AM hora del centro de México)
+    # Se ejecuta todos los dias a las 16:00 UTC (10:00 AM hora del centro de Mexico)
     - cron: '0 16 * * *'
-  workflow_dispatch: # Este botón te permite correrlo manualmente desde GitHub cuando quieras
+  workflow_dispatch: # Permite correrlo manualmente desde la pestaña "Actions"
+
+permissions:
+  contents: write # CRITICO: Permite al bot guardar el CSV modificado en tu repositorio
 
 jobs:
   mlb-predictions:
@@ -23,11 +26,19 @@ jobs:
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install scikit-learn pandas cloudscraper beautifulsoup4 requests
+          pip install scikit-learn pandas cloudscraper beautifulsoup4 requests scipy
 
       - name: Ejecutar Scraper de Momios
         run: python live_odds_scraper.py
-        continue-on-error: true # Si Cloudflare lo bloquea, que no detenga todo el proceso
+        continue-on-error: true # Evita que todo colapse si Cloudflare bloquea la IP del datacenter
 
       - name: Correr Modelo y Generar Picks
         run: python run_daily_picks.py
+
+      - name: Guardar Historial y Momios (Auto-Commit)
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add history_log.csv data_odds/live_odds.json || true
+          git commit -m "Auto-Update: Registro de picks diarios y momios [skip ci]" || echo "Sin cambios nuevos para guardar"
+          git push

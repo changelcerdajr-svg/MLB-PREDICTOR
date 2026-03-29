@@ -17,12 +17,12 @@ def scrape_live_mlb_odds():
     scraper = cloudscraper.create_scraper()
     url = "https://www.vegasinsider.com/mlb/odds/las-vegas/"
     
-    print(f"Accediendo a VegasInsider ({datetime.datetime.now().strftime('%H:%M')})...")
+    print(f"🌐 Accediendo a VegasInsider ({datetime.datetime.now().strftime('%H:%M')})...")
     
     try:
         response = scraper.get(url)
         if response.status_code != 200:
-            print("El servidor bloqueó la conexión.")
+            print("❌ El servidor bloqueó la conexión.")
             return None
             
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -31,12 +31,12 @@ def scrape_live_mlb_odds():
         team_rows = [tr for tr in trs if tr.find('td', class_='game-team')]
         
         if not team_rows:
-            print("No se encontraron equipos. VegasInsider pudo haber cambiado su diseño nuevamente.")
+            print("⚠️ No se encontraron equipos. VegasInsider pudo haber cambiado su diseño nuevamente.")
             return None
 
         live_data = []
         
-        print(f"Se encontraron {len(team_rows) // 2} partidos programados.")
+        print(f"✅ Se encontraron {len(team_rows) // 2} partidos programados.")
         
         for i in range(0, len(team_rows) - 1, 2):
             away_tr = team_rows[i]
@@ -79,7 +79,7 @@ def scrape_live_mlb_odds():
         return live_data
 
     except Exception as e:
-        print(f"Error en el procesamiento: {e}")
+        print(f"❌ Error en el procesamiento: {e}")
         return None
 
 if __name__ == "__main__":
@@ -92,4 +92,4 @@ if __name__ == "__main__":
         
         with open("data_odds/live_odds.json", "w", encoding="utf-8") as f:
             json.dump(final_json, f, indent=4)
-        print(f"Exito. Se guardaron {len(data)} lineas de momios en data_odds/live_odds.json")
+        print(f"💰 Exito. Se guardaron {len(data)} lineas de momios en data_odds/live_odds.json")

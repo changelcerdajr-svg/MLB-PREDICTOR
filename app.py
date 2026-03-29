@@ -1,34 +1,40 @@
-# app.py
-# MLB Quant Engine - Web Interface V17.3 (Soberanía de Datos y Kelly Criterion)
-
 import streamlit as st
 import datetime
 import json
 import os
+import pandas as pd
 from model import MLBPredictor
 from financial import american_to_prob
-import tracker 
+import tracker
 
-st.set_page_config(page_title="MLB Quant Engine V17", page_icon="⚾", layout="wide", initial_sidebar_state="expanded")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="MLB Quant Engine V17.3", page_icon="⚾", layout="wide", initial_sidebar_state="expanded")
 
 # --- CONSTANTES DE RIESGO ---
 CONFIDENCE_THRESHOLD = 0.55
 MAX_ODDS_LIMIT = -250
 KELLY_FRACTION = 0.25
 
-# --- CSS PERSONALIZADO ---
+# --- CSS PERSONALIZADO (Restaurando UI Completa) ---
 st.markdown("""
 <style>
-    .card-deportiva { background-color: #1C1C1E; padding: 18px; border-radius: 16px; border: 1px solid #2C2C2E; height: 100%; box-shadow: 0 4px 10px rgba(0,0,0,0.2); margin-bottom: 15px;}
-    .badge-blue { background-color: #0066FF; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
-    .badge-green { background-color: #19B664; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; }
-    .badge-red { background-color: #FF3B30; color: white; padding: 5px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 800; text-transform: uppercase; }
-    .team-name { font-size: 1.4em; font-weight: 700; color: #FFFFFF; margin: 10px 0 5px 0;}
-    .pitcher-name { font-size: 0.85em; color: #8E8E93; margin-bottom: 15px;}
-    .stat-row { display: flex; justify-content: space-between; border-bottom: 1px solid #2C2C2E; padding: 8px 0; font-size: 0.9em; color: #E5E5EA;}
-    .section-divider { border-top: 2px solid #333; margin: 30px 0; }
-    .section-title { font-size: 1.5em; font-weight: bold; margin-bottom: 20px; color: #FFF; }
-    .kelly-recommendation { background-color: rgba(25, 182, 100, 0.1); border-left: 4px solid #19B664; padding: 10px; margin-top: 15px; border-radius: 4px;}
+    .card-deportiva { background-color: #1C1C1E; padding: 20px; border-radius: 16px; border: 1px solid #2C2C2E; box-shadow: 0 4px 15px rgba(0,0,0,0.3); margin-bottom: 20px; transition: transform 0.2s; }
+    .card-deportiva:hover { transform: translateY(-2px); border-color: #3A3A3C; }
+    .badge-blue { background-color: #0066FF; color: white; padding: 6px 12px; border-radius: 12px; font-size: 0.8em; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge-green { background-color: #19B664; color: white; padding: 6px 12px; border-radius: 12px; font-size: 0.8em; font-weight: 800; text-transform: uppercase; }
+    .badge-red { background-color: #FF3B30; color: white; padding: 6px 12px; border-radius: 12px; font-size: 0.8em; font-weight: 800; text-transform: uppercase; }
+    .badge-warning { background-color: #FF9500; color: white; padding: 6px 12px; border-radius: 12px; font-size: 0.8em; font-weight: 800; text-transform: uppercase; }
+    .team-name { font-size: 1.6em; font-weight: 800; color: #FFFFFF; margin: 5px 0 2px 0; letter-spacing: -0.5px;}
+    .pitcher-name { font-size: 0.9em; color: #8E8E93; margin-bottom: 10px; font-weight: 500;}
+    .score-proj { font-size: 1.4em; font-weight: 800; color: #32D74B; float: right;}
+    .stat-row { display: flex; justify-content: space-between; border-bottom: 1px solid #2C2C2E; padding: 10px 0; font-size: 0.95em; color: #E5E5EA;}
+    .stat-row:last-child { border-bottom: none; }
+    .section-divider { border-top: 2px solid #333; margin: 40px 0; }
+    .section-title { font-size: 1.8em; font-weight: 800; margin-bottom: 25px; color: #FFF; letter-spacing: -0.5px;}
+    .kelly-recommendation { background-color: rgba(25, 182, 100, 0.1); border-left: 4px solid #19B664; padding: 15px; margin-top: 20px; border-radius: 6px;}
+    .no-edge-box { background-color: rgba(255, 59, 48, 0.1); border-left: 4px solid #FF3B30; padding: 15px; margin-top: 20px; border-radius: 6px;}
+    .detail-box { background-color: #2C2C2E; padding: 12px; border-radius: 8px; margin-top: 10px; font-size: 0.85em; color: #D1D1D6;}
+    .metric-value { font-family: 'Courier New', Courier, monospace; font-weight: bold; color: #0A84FF;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -44,6 +50,10 @@ def load_live_odds():
 def american_to_decimal(american):
     if american > 0: return (american / 100) + 1
     return (100 / abs(american)) + 1
+
+def format_odds(american):
+    if american > 0: return f"+{american}"
+    return str(american)
 
 def calculate_kelly(prob_win, american_odds):
     b = american_to_decimal(american_odds) - 1
@@ -64,149 +74,242 @@ def get_today_odds(odds_data, date_str, mlb_home_name):
                 if book.get('sportsbook') == 'draftkings':
                     line = book.get('currentLine')
                     if line: return line.get('homeOdds'), line.get('awayOdds')
+            if ml_list:
+                line = ml_list[0].get('currentLine')
+                if line: return line.get('homeOdds'), line.get('awayOdds')
     return None, None
 
-# --- INICIALIZACIÓN ---
-st.title("⚾ Terminal MLB Quant V17.3")
-st.markdown("Motor de Predicción Estocástica y Gestión de Riesgo Institucional")
+# --- INICIALIZACIÓN DE DATOS ---
+st.title("⚾ Terminal de Operaciones Cuantitativas MLB")
+st.markdown("Motor Estocástico V17.3 | Integradora Statcast & Gestión Kelly Criterion")
 
-predictor = MLBPredictor(use_calibrator=False) # Usamos modelo en crudo para Alpha Real
+@st.cache_resource
+def get_predictor():
+    return MLBPredictor(use_calibrator=False)
+
+predictor = get_predictor()
 odds_data = load_live_odds()
 today_str = datetime.datetime.now().strftime("%Y-%m-%d")
 
 games = predictor.loader.get_schedule(today_str)
 
-# --- SIDEBAR: PANEL DE CONTROL ---
+# --- BARRA LATERAL (CONFIGURACIÓN Y STATUS) ---
 with st.sidebar:
-    st.header("⚙️ Configuración del Bankroll")
-    bankroll = st.number_input("Capital Operativo ($)", value=1000.0, step=100.0)
+    st.image("https://www.mlbstatic.com/team-logos/league-on-dark/1.svg", width=150)
+    st.header("⚙️ Gestión de Capital")
+    bankroll = st.number_input("Bankroll Operativo ($)", value=1000.0, step=100.0, format="%.2f")
+    
     st.markdown("---")
-    st.markdown("### Estado del Sistema")
+    st.header("📡 Status del Sistema")
     if not odds_data:
-        st.error("⚠️ Datos de mercado desconectados. Ejecuta `python live_odds_scraper.py` en tu terminal.")
+        st.error("⚠️ Líneas Desconectadas. Ejecuta el scraper localmente.")
     else:
-        st.success("✅ Momios de DraftKings Sincronizados")
-        st.write(f"Partidos extraídos: {len(odds_data.get(today_str, []))}")
-    st.write(f"Juegos MLB Hoy: {len(games) if games else 0}")
+        st.success("✅ Conexión a Mercado Estable")
+        st.write(f"📊 Líneas Extraídas: {len(odds_data.get(today_str, []))}")
+    
+    st.write(f"⚾ Juegos Programados: {len(games) if games else 0}")
+    
+    st.markdown("---")
+    st.markdown("### Parámetros de Riesgo")
+    st.write(f"🎯 **Confianza Mínima:** {CONFIDENCE_THRESHOLD*100}%")
+    st.write(f"🛑 **Límite de Momio:** {MAX_ODDS_LIMIT}")
+    st.write(f"⚖️ **Kelly Fraction:** {KELLY_FRACTION}x")
 
-# --- SECCIÓN DE PREDICCIONES DIARIAS ---
-st.markdown("<div class='section-title'>🎯 Pizarra de Operaciones de Hoy</div>", unsafe_allow_html=True)
+# --- SECCIÓN PRINCIPAL: PIZARRA DE JUEGOS ---
+st.markdown("<div class='section-title'>🎯 Panel de Inversión Diaria</div>", unsafe_allow_html=True)
 
 if not games:
-    st.info("No hay juegos programados en la MLB para el día de hoy.")
+    st.info("No hay juegos programados en la MLB para la fecha actual.")
 else:
-    cols = st.columns(3)
-    col_idx = 0
-
-    for g in games:
+    # Usamos un layout dinámico de columnas
+    col1, col2 = st.columns(2)
+    
+    for idx, g in enumerate(games):
         if g['status'] in ['Final', 'In Progress']: continue
         
-        # Cruzar con JSON Local
+        # Obtener momios del JSON
         h_odds, a_odds = get_today_odds(odds_data, today_str, g['home_name'])
         
-        res = predictor.predict_game(g)
-        if 'error' in res: continue
+        # Generar Predicción
+        with st.spinner(f"Analizando {g['away_name']} vs {g['home_name']}..."):
+            res = predictor.predict_game(g)
+        
+        if 'error' in res:
+            with (col1 if idx % 2 == 0 else col2):
+                st.error(f"Faltan datos de Statcast para {g['away_name']} @ {g['home_name']}")
+            continue
 
         prob = res['confidence']
         pick = res['winner']
         
-        # Tarjeta Visual
-        with cols[col_idx % 3]:
-            # Lógica de Color del Badge
-            if prob >= CONFIDENCE_THRESHOLD:
-                badge_class = "badge-green"
-                status_text = "VENTAJA MATEMÁTICA"
-            else:
-                badge_class = "badge-red"
-                status_text = "NO BET (BAJA CONFIANZA)"
-                
+        # Determinar status visual
+        if prob >= CONFIDENCE_THRESHOLD:
+            badge_class = "badge-green"
+            status_text = "SEÑAL ACTIVA"
+        else:
+            badge_class = "badge-warning"
+            status_text = "RIESGO ALTO (BAJA CONFIANZA)"
+            
+        with (col1 if idx % 2 == 0 else col2):
             st.markdown(f"""
             <div class='card-deportiva'>
-                <span class='{badge_class}'>{status_text}</span>
-                <div style='margin-top:10px;'>
-                    <div class='team-name'>{g['away_name']}</div>
-                    <div class='pitcher-name'>P: {g['away_pitcher']}</div>
-                    <div class='team-name'>@ {g['home_name']}</div>
-                    <div class='pitcher-name'>P: {g['home_pitcher']}</div>
+                <div>
+                    <span class='{badge_class}'>{status_text}</span>
+                    <span style='float:right; color:#8E8E93; font-size:0.8em;'>{g.get('game_time', 'TBD')}</span>
+                </div>
+                
+                <div style='margin-top: 15px;'>
+                    <div style='display: flex; justify-content: space-between; align-items: center;'>
+                        <div class='team-name'>{g['away_name']}</div>
+                        <div class='score-proj'>{res['score']['away']:.1f}</div>
+                    </div>
+                    <div class='pitcher-name'>Probable: {g['away_pitcher']}</div>
+                    
+                    <div style='display: flex; justify-content: space-between; align-items: center; margin-top: 5px;'>
+                        <div class='team-name'>@ {g['home_name']}</div>
+                        <div class='score-proj'>{res['score']['home']:.1f}</div>
+                    </div>
+                    <div class='pitcher-name'>Probable: {g['home_pitcher']}</div>
+                </div>
+                
+                <div style='margin-top: 15px; border-top: 1px solid #2C2C2E; padding-top: 15px;'>
+                    <div class='stat-row'>
+                        <span>Pick del Modelo:</span>
+                        <span style='color: #FFFFFF; font-weight: bold; font-size: 1.1em;'>{pick}</span>
+                    </div>
+                    <div class='stat-row'>
+                        <span>Probabilidad de Victoria:</span>
+                        <span style='color: #32D74B; font-weight: bold; font-size: 1.1em;'>{prob*100:.1f}%</span>
+                    </div>
+                    <div class='stat-row'>
+                        <span>Total Proyectado (O/U):</span>
+                        <span style='color: #0A84FF; font-weight: bold;'>{res['score']['total']:.1f} Carreras</span>
+                    </div>
                 </div>
             """, unsafe_allow_html=True)
             
-            # Estadísticas internas
-            st.markdown(f"""
-                <div class='stat-row'><span>Predicción Modelo:</span> <b>{pick}</b></div>
-                <div class='stat-row'><span>Probabilidad de Victoria:</span> <b>{prob*100:.1f}%</b></div>
-            """, unsafe_allow_html=True)
+            # Expandible para Análisis Profundo (Restaurando funciones antiguas)
+            with st.expander("🔬 Desglose Cuantitativo y Statcast"):
+                st.markdown(f"""
+                <div class='detail-box'>
+                    <b>Pitcheo (xERA Bayesiano):</b><br>
+                    {res['details']['pitching']}<br><br>
+                    <b>Poder Ofensivo (xwOBA):</b><br>
+                    {res['details']['offense']}<br><br>
+                    <b>Factores Estructurales:</b><br>
+                    {res['details']['environment']}<br>
+                    <i>Sensibilidad: {res['details']['sensitivity']}</i>
+                </div>
+                """, unsafe_allow_html=True)
             
-            # Renderizado Financiero si hay momios
+            # Sección Financiera
             if h_odds is not None:
                 curr_odds = h_odds if pick == g['home_name'] else a_odds
                 market_prob = american_to_prob(curr_odds)
                 edge = prob - market_prob
                 
                 st.markdown(f"""
-                    <div class='stat-row'><span>Momio DraftKings:</span> <b>{curr_odds}</b></div>
-                    <div class='stat-row'><span>Edge vs Mercado:</span> <b>{edge*100:+.1f}%</b></div>
+                    <div class='stat-row' style='margin-top:10px;'>
+                        <span>Línea DraftKings:</span>
+                        <b style='color:#FFF;'>{format_odds(curr_odds)}</b>
+                    </div>
+                    <div class='stat-row'>
+                        <span>Probabilidad Implícita Casino:</span>
+                        <b>{market_prob*100:.1f}%</b>
+                    </div>
+                    <div class='stat-row'>
+                        <span>Edge (Ventaja Matemática):</span>
+                        <b style='color: {"#32D74B" if edge > 0 else "#FF3B30"};'>{edge*100:+.2f}%</b>
+                    </div>
                 """, unsafe_allow_html=True)
                 
-                # Evaluación de Inversión
-                if prob >= CONFIDENCE_THRESHOLD and (curr_odds >= 0 or curr_odds >= MAX_ODDS_LIMIT):
-                    stake_pct = calculate_kelly(prob, curr_odds)
-                    if stake_pct > 0:
-                        stake_amount = bankroll * stake_pct
-                        st.markdown(f"""
-                        <div class='kelly-recommendation'>
-                            <b>💡 SUGERENCIA KELLY (0.25x):</b><br>
-                            Apostar ${stake_amount:.2f} ({stake_pct*100:.2f}% del Bankroll)
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Botón para registrar rápido en el tracker
-                        if st.button(f"📝 Registrar Apuesta", key=f"btn_{g['home_name']}"):
-                            saved = tracker.log_bet(
-                                fecha=today_str,
-                                juego=f"{g['away_name']} @ {g['home_name']}",
-                                pick=pick,
-                                confianza=prob*100,
-                                prob_mercado=market_prob,
-                                cuota=curr_odds,
-                                edge=round(edge*100, 2)
-                            )
-                            if saved:
-                                st.success("¡Registrado en history_log.csv!")
-                            else:
-                                st.warning("Ya estaba registrado.")
+                # Evaluación de Kelly y Ejecución
+                if prob >= CONFIDENCE_THRESHOLD:
+                    if curr_odds >= 0 or curr_odds >= MAX_ODDS_LIMIT:
+                        stake_pct = calculate_kelly(prob, curr_odds)
+                        if stake_pct > 0:
+                            stake_amount = bankroll * stake_pct
+                            st.markdown(f"""
+                            <div class='kelly-recommendation'>
+                                <h4 style='margin:0; color:#19B664;'>💡 APROBACIÓN DE INVERSIÓN</h4>
+                                <div style='margin-top: 5px; font-size: 1.1em; color: #FFF;'>
+                                    Recomendación {KELLY_FRACTION}x Kelly: <b>${stake_amount:.2f}</b><br>
+                                    <span style='font-size: 0.85em; color: #D1D1D6;'>({stake_pct*100:.2f}% del Bankroll Total)</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Botón de Registro en Tracker
+                            btn_key = f"btn_{g['home_name'].replace(' ', '_')}"
+                            if st.button("💾 Registrar Operación en Bitácora", key=btn_key, use_container_width=True):
+                                saved = tracker.log_bet(
+                                    fecha=today_str,
+                                    juego=f"{g['away_name']} @ {g['home_name']}",
+                                    pick=pick,
+                                    confianza=prob*100,
+                                    prob_mercado=market_prob,
+                                    cuota=curr_odds,
+                                    edge=round(edge*100, 2)
+                                )
+                                if saved:
+                                    st.success("Operación guardada exitosamente en history_log.csv")
+                                else:
+                                    st.warning("Esta operación ya fue registrada el día de hoy.")
+                        else:
+                            st.markdown("<div class='no-edge-box'><b>⚠️ RIESGO MATEMÁTICO:</b> Edge Negativo bajo Criterio de Kelly. (Mercado Eficiente)</div>", unsafe_allow_html=True)
                     else:
-                        st.markdown("<div style='margin-top:10px; color:#FF3B30; font-size:0.9em;'>❌ Sin Edge Financiero (Momio muy castigado)</div>", unsafe_allow_html=True)
-                elif curr_odds < MAX_ODDS_LIMIT:
-                    st.markdown(f"<div style='margin-top:10px; color:#FF3B30; font-size:0.9em;'>❌ Momio excede límite de riesgo ({MAX_ODDS_LIMIT})</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='no-edge-box'><b>⛔ LÍMITE DE EXPOSICIÓN:</b> Momio ({curr_odds}) demasiado caro. Supera el límite de {MAX_ODDS_LIMIT}.</div>", unsafe_allow_html=True)
             else:
-                st.markdown("<div style='margin-top:10px; color:#FF9500; font-size:0.9em;'>⏳ Esperando líneas de apertura...</div>", unsafe_allow_html=True)
+                st.markdown("<div class='no-edge-box' style='border-left-color: #FF9500;'><b>⏳ MERCADO CERRADO:</b> Esperando apertura de líneas de Las Vegas.</div>", unsafe_allow_html=True)
                 
             st.markdown("</div>", unsafe_allow_html=True)
-        col_idx += 1
 
-# --- SECCIÓN DEL TRACK RECORD ---
-st.markdown("<hr class='section-divider'><div class='section-title'>📊 Tu Récord Histórico de Operaciones</div>", unsafe_allow_html=True)
+# --- SECCIÓN: TRACK RECORD (HISTORIAL INSTITUCIONAL) ---
+st.markdown("<hr class='section-divider'><div class='section-title'>📊 Auditoría de Rendimiento (CLV Track Record)</div>", unsafe_allow_html=True)
 
-df_log = tracker.load_tracker()
-
-if not df_log.empty:
-    ganados = len(df_log[df_log['Resultado'] == 'Ganado'])
-    perdidos = len(df_log[df_log['Resultado'] == 'Perdido'])
-    total_cerrados = ganados + perdidos
-    win_rate = (ganados / total_cerrados * 100) if total_cerrados > 0 else 0
+try:
+    df_log = tracker.load_tracker()
     
-    c_t1, c_t2, c_t3 = st.columns(3)
-    c_t1.metric("Win Rate Real", f"{win_rate:.1f}%")
-    c_t2.metric("Ganados", ganados)
-    c_t3.metric("Perdidos", perdidos)
-    
-    st.caption("Haz doble clic en la columna 'Resultado' para marcar tus juegos como 'Ganado' o 'Perdido'.")
-    
-    edited_df = st.data_editor(df_log, use_container_width=True, hide_index=True)
-    
-    if st.button("Guardar Cambios en Historial", use_container_width=True):
-        edited_df.to_csv(tracker.FILE, index=False)
-        st.success("Historial actualizado correctamente.")
-else:
-    st.info("Tu historial de apuestas está vacío. Las apuestas que apruebes aparecerán aquí para medir tu CLV.")
+    if not df_log.empty:
+        df_log['Fecha'] = pd.to_datetime(df_log['Fecha'])
+        df_log = df_log.sort_values(by='Fecha', ascending=False).reset_index(drop=True)
+        
+        ganados = len(df_log[df_log['Resultado'] == 'Ganado'])
+        perdidos = len(df_log[df_log['Resultado'] == 'Perdido'])
+        pendientes = len(df_log[df_log['Resultado'] == 'Pendiente'])
+        total_cerrados = ganados + perdidos
+        
+        win_rate = (ganados / total_cerrados * 100) if total_cerrados > 0 else 0.0
+        
+        # Métricas rápidas
+        met1, met2, met3, met4 = st.columns(4)
+        met1.metric("Win Rate Histórico", f"{win_rate:.1f}%", f"{ganados}G - {perdidos}P")
+        met2.metric("Juegos Pendientes", pendientes)
+        met3.metric("Promedio de Confianza", f"{df_log['Confianza (%)'].mean():.1f}%")
+        met4.metric("Edge Promedio Capturado", f"{df_log['Edge'].mean():+.2f}%")
+        
+        st.markdown("### Bitácora Editable")
+        st.caption("Instrucciones: Haz doble clic en la columna 'Resultado' para calificar los picks como 'Ganado' o 'Perdido'.")
+        
+        edited_df = st.data_editor(
+            df_log, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Resultado": st.column_config.SelectboxColumn(
+                    "Resultado del Juego",
+                    help="Actualiza el status de la apuesta",
+                    options=["Pendiente", "Ganado", "Perdido"],
+                    required=True
+                )
+            }
+        )
+        
+        if st.button("💾 Guardar Actualizaciones del Historial", use_container_width=True):
+            edited_df.to_csv(tracker.FILE, index=False)
+            st.success("¡Base de datos actualizada con éxito!")
+            
+    else:
+        st.info("La bitácora de operaciones está vacía. Registra tu primera operación para comenzar a medir tu Alpha.")
+except Exception as e:
+    st.error(f"Error al cargar el Tracker Institucional: {e}")

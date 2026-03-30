@@ -5,7 +5,7 @@ import json
 import textwrap
 import requests
 from model import MLBPredictor
-from financial import american_to_prob
+from financial import american_to_prob, get_fair_prob, calculate_edge
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="MLB Quant Terminal", layout="wide", initial_sidebar_state="expanded")
@@ -222,19 +222,28 @@ else:
         if 'error' in res:
             st.error(res['error'])
         else:
-            h_odds, a_odds = get_target_odds(odds_data, date_str, g['home_name'])
+            # 1. Datos básicos
             h_pitcher = get_pitcher_name(g['home_pitcher'])
             a_pitcher = get_pitcher_name(g['away_pitcher'])
             h_logo, a_logo = get_logo_url(g['home_id']), get_logo_url(g['away_id'])
             
+            # 2. Resultados del Modelo
             pick, prob = res['winner'], res['confidence']
-            curr_odds = (h_odds if pick == g['home_name'] else a_odds) if h_odds else None
-            mkt_prob = american_to_prob(curr_odds) if curr_odds else 0
-            edge = prob - mkt_prob
+            h_odds, a_odds = get_target_odds(odds_data, date_str, g['home_name'])
             
-            # Badge logic
-            if edge >= 0.08: grade = "<span class='badge badge-a'>GRADE A</span>"
-            elif edge >= 0.03: grade = "<span class='badge badge-b'>GRADE B</span>"
+            # 3. Cálculo de Edge Institucional (Sin Vig)
+            fair_h, fair_a = get_fair_prob(h_odds, a_odds) if h_odds else (0.5, 0.5)
+            market_prob_clean = fair_h if pick == g['home_name'] else fair_a
+            curr_odds = h_odds if pick == g['home_name'] else a_odds # <--- Crucial
+            
+            edge_report = calculate_edge(prob, market_prob_clean)
+            edge = edge_report['edge']
+            edge_display = edge_report['edge_pct']
+            verdict = edge_report['verdict']
+
+            # 4. Asignación de Grado
+            if "HIGH" in verdict: grade = "<span class='badge badge-a'>GRADE A</span>"
+            elif "VALUE" in verdict: grade = "<span class='badge badge-b'>GRADE B</span>"
             else: grade = "<span class='badge badge-no'>NO PLAY</span>"
 
             html_main = f"""
@@ -248,7 +257,7 @@ else:
                 <div class='data-grid'>
                     <div class='data-block'><div class='data-label'>MODEL</div><div class='data-value text-blue'>{prob*100:.1f}%</div></div>
                     <div class='data-block'><div class='data-label'>GRADE</div><div style='margin-top:10px;'>{grade}</div></div>
-                    <div class='data-block'><div class='data-label'>MARKET</div><div class='data-value'>{mkt_prob*100:.1f}%</div></div>
+                    <div class='data-block'><div class='data-label'>MARKET</div><div class='data-value'>{market_prob_clean*100:.1f}%</div></div>
                 </div>
             </div>
             """

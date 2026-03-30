@@ -152,13 +152,14 @@ class MLBDataLoader:
                     stat = data['stats'][0]['splits'][0]['stat']
                     
                     if stat_group == 'hitting':
-                        # Usamos la fórmula de pesos lineales (OBP vs SLG) en lugar de OPS lineal
                         obp = float(stat.get('onBasePct', 0.320))
                         slg = float(stat.get('slugging', 0.400))
-                        res = (1.7 * obp + slg) / 2.65
-                    else:
-                        # Para lanzadores usamos el ERA como base del Prior
-                        res = float(stat.get('era', LEAGUE_AVG_XERA))
+                        
+                        # Cálculo raw con pesos de Linear Weights
+                        # data_loader.py
+                        raw_woba = (1.7 * obp + slg) / 2.65
+                        res = raw_woba * 0.885  # <--- Este es el "ancla" a la realidad de la liga
+                        
             except:
                 # Si falla la API, usamos el promedio de la liga como última red de seguridad
                 res = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA

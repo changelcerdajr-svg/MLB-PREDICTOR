@@ -1,7 +1,7 @@
 import json
 import datetime
 from model import MLBPredictor
-from financial import american_to_prob # Importamos de tu módulo financiero
+from financial import american_to_prob, get_fair_prob, calculate_edge
 import tracker # Importamos tu base de datos local
 
 LIVE_ODDS_PATH = 'data_odds/live_odds.json'
@@ -88,8 +88,19 @@ def generate_daily_picks():
         
         # Cálculos para el Tracker
         game_title = f"{g['away_name']} @ {g['home_name']}"
-        market_prob = american_to_prob(curr_odds)
-        edge = prob - market_prob
+        # 1. Eliminación del Vig (Punto 1 Auditoría): Obtenemos el Fair Value real
+        fair_h, fair_a = get_fair_prob(h_odds, a_odds)
+        
+        # 2. Seleccionamos la probabilidad justa que corresponde a nuestro pick
+        market_prob = fair_h if pick == g['home_name'] else fair_a
+        
+        # 3. Cálculo de Edge Real (Alpha) sobre Fair Value usando el motor financiero
+        edge_report = calculate_edge(prob, market_prob)
+        edge = edge_report['edge'] # Esto ahora es Alpha real, no ilusión contable
+
+        # Si después de quitar el Vig el Edge es negativo o cero, abortamos la operación
+        if edge <= 0:
+            continue
         
         print(f"\n✅ APUESTA APROBADA: {game_title}")
         print(f"👉 PICK: {pick} | Prob Modelo: {prob*100:.1f}% | Momio: {curr_odds}")

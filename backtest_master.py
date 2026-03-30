@@ -149,4 +149,4 @@ def run_master_backtest(start_date_str, days=45):
 
 if __name__ == "__main__":
     # Corremos los mismos 45 días del dataset histórico
-    run_master_backtest("2024-08-01", days=45)
+    run_master_backtest("2025-08-01", days=8)

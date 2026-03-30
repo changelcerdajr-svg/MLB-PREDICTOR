@@ -283,6 +283,19 @@ class MLBDataLoader:
                 res['fielding'] = float(f_data['stats'][0]['splits'][0]['stat'].get('fielding', 0.985))
         except: pass
         return res
+    
+    def get_team_discipline(self, team_id):
+        # Proxy para la vulnerabilidad ofensiva frente a arsenales de alto poder (K%)
+        try:
+            data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting'})
+            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
+                s = data['stats'][0]['splits'][0]['stat']
+                pa = float(s.get('plateAppearances', 1))
+                so = float(s.get('strikeouts', 0))
+                if pa > 0:
+                    return so / pa
+        except: pass
+        return 0.22 # Promedio histórico de la liga (22% de ponches)
 
     def get_bullpen_stats(self, team_id):
         stats = {'era': 4.00, 'whip': 1.30, 'fip': 4.10}
@@ -373,19 +386,44 @@ class MLBDataLoader:
         try:
             import datetime 
             date_obj = datetime.datetime.strptime(game_date, "%Y-%m-%d")
-            if date_obj.month == 3 or (date_obj.month == 4 and date_obj.day <= 7): return 0.0 
-            for i in range(1, 4): 
+            
+            # En inicio de temporada (Marzo/Abril) asumimos que los brazos están frescos
+            if date_obj.month == 3 or (date_obj.month == 4 and date_obj.day <= 7): 
+                return 0.0 
+            
+            # Analizamos la carga de trabajo REAL en las últimas 48 horas
+            for i in range(1, 3): 
                 prev_date = (date_obj - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 data = self._get("schedule", {'sportId': 1, 'date': prev_date, 'teamId': team_id, 'gameType': 'R'})
+                
                 if data and 'dates' in data and data['dates']:
                     for g in data['dates'][0]['games']:
                         if g['status']['abstractGameState'] == 'Final':
-                            is_home = g['teams']['home']['team']['id'] == team_id
-                            runs_allowed = g['teams']['home']['score'] if not is_home else g['teams']['away']['score']
-                            if runs_allowed > 5: fatigue_score += 0.12
-                            fatigue_score += 0.08 
-            return min(0.4, fatigue_score) 
-        except Exception as e: return 0.1
+                            game_pk = g['gamePk']
+                            
+                            # --- NUEVO: Extraemos el boxscore real para contar los brazos usados ---
+                            box = self._get(f"game/{game_pk}/boxscore")
+                            if box:
+                                team_side = 'home' if g['teams']['home']['team']['id'] == team_id else 'away'
+                                p_stats = box['teams'][team_side]['teamStats']['pitching']
+                                
+                                # Contamos cuántos pitchers se subieron a la lomita en total
+                                pitchers_used = int(p_stats.get('pitchersUsed', 1))
+                                relievers_used = max(0, pitchers_used - 1) # Restamos al abridor
+                                
+                                # Aplicamos penalización matemática (Castiga el doble si el cansancio fue ayer)
+                                if relievers_used >= 5: # Juego de extra innings o paliza (Bullpen destruido)
+                                    fatigue_score += 0.25 if i == 1 else 0.15
+                                elif relievers_used == 4: # Uso intenso
+                                    fatigue_score += 0.15 if i == 1 else 0.08
+                                elif relievers_used == 3: # Uso regular
+                                    fatigue_score += 0.08 if i == 1 else 0.04
+                                    
+            # Tope máximo de penalización para no sobre-castigar el modelo
+            return min(0.45, fatigue_score) 
+            
+        except Exception as e: 
+            return 0.10 # Castigo genérico en caso de error de conexión
 
     def get_pitcher_hand(self, pid):
         if not pid: return 'R'

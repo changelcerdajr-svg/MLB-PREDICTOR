@@ -49,6 +49,29 @@ class MLBPredictor:
         h_xwoba_adj = (h_xwoba * 0.7) + (h_split['woba'] * 0.3)
         a_xwoba_adj = (a_xwoba * 0.7) + (a_split['woba'] * 0.3)
 
+        # 4.5 Matchup de Arsenal Biomecánico (Poder del Pitcher vs Vulnerabilidad del Lineup)
+        h_discipline_k_rate = self.loader.get_team_discipline(game['home_id'])
+        a_discipline_k_rate = self.loader.get_team_discipline(game['away_id'])
+
+        def calculate_arsenal_advantage(pitcher_k9, batter_k_rate):
+            # Base del modelo: Pitcher K/9 promedio es ~8.5, Bateador K% promedio es ~0.22
+            k9_diff = (pitcher_k9 - 8.5) / 8.5
+            k_rate_diff = (batter_k_rate - 0.22) / 0.22
+            
+            # Interacción matemática: Si el K/9 es alto Y el K% rival es alto, el multiplicador es positivo.
+            interaction = k9_diff * k_rate_diff
+            
+            # Convertimos esto en un castigo/premio para el poder ofensivo del rival (Tope de +- 6%)
+            return 1.0 - max(-0.06, min(0.06, interaction * 0.5))
+
+        # Calculamos la ventaja del abridor visitante contra el lineup local
+        a_arsenal_mult = calculate_arsenal_advantage(a_pstats['k9'], h_discipline_k_rate)
+        h_xwoba_adj = h_xwoba_adj * a_arsenal_mult
+
+        # Calculamos la ventaja del abridor local contra el lineup visitante
+        h_arsenal_mult = calculate_arsenal_advantage(h_pstats['k9'], a_discipline_k_rate)
+        a_xwoba_adj = a_xwoba_adj * h_arsenal_mult
+
         # 5. Integración de Momentum y Pitagóricas
         h_mom = self.loader.get_team_momentum(game['home_id'], game['date'])
         a_mom = self.loader.get_team_momentum(game['away_id'], game['date'])

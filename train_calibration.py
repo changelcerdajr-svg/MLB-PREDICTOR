@@ -1,70 +1,94 @@
-# train_calibration.py - V17.0 (Sincronizado con Statcast)
+# train_calibration.py - V17.9 (Full Audit)
 from model import MLBPredictor
 from datetime import datetime, timedelta
 from sklearn.isotonic import IsotonicRegression
+from financial import get_fair_prob
 import pickle
+import json
 import os
+from scipy.optimize import brentq
+
+
+# --- FUNCIÓN DE APOYO PARA LEER TUS ODDS HISTÓRICOS ---
+def get_historical_odds(date_str, home_team_name):
+    path = f'data_odds/mlb_odds_dataset.json'
+    if not os.path.exists(path): return None, None
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        games = data.get(date_str, [])
+        for g in games:
+            dk_home = g.get('gameView', {}).get('homeTeam', {}).get('fullName', '').lower()
+            if home_team_name.lower() in dk_home:
+                ml = g.get('odds', {}).get('moneyline', [])
+                for book in ml:
+                    if book['sportsbook'] == 'draftkings':
+                        return book['currentLine']['homeOdds'], book['currentLine']['awayOdds']
+    except: pass
+    return None, None
 
 def train_isotonic_calibrator():
-    # Detectamos el año actual
     current_year = datetime.now().year
-    
-    # Si estamos en pre-temporada (antes de Abril), calibramos con el cierre del año pasado
     if datetime.now().month < 4:
-        TRAIN_START = f"{current_year - 1}-08-15"
-        TRAIN_END = f"{current_year - 1}-09-30"
+        TRAIN_START, TRAIN_END = f"{current_year - 1}-08-15", f"{current_year - 1}-09-30"
     else:
-        # Si ya hay temporada, usamos los últimos 30 días
         end_dt = datetime.now() - timedelta(days=1)
         start_dt = end_dt - timedelta(days=30)
-        TRAIN_START = start_dt.strftime("%Y-%m-%d")
-        TRAIN_END = end_dt.strftime("%Y-%m-%d")
+        TRAIN_START, TRAIN_END = start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
 
-    print(f"🛰️ CALIBRACIÓN AUTOMÁTICA: {TRAIN_START} al {TRAIN_END}")
+    print(f"🚀 INICIANDO AUDITORÍA Y CALIBRACIÓN: {TRAIN_START} al {TRAIN_END}")
     
     predictor = MLBPredictor(use_calibrator=False) 
-    loader = predictor.loader
-    loader._force_historical_mode = True 
-    
+    X_raw, y_real = [], []
+    units_won, bets_count = 0.0, 0
+
     current_date = datetime.strptime(TRAIN_START, "%Y-%m-%d")
     end_date = datetime.strptime(TRAIN_END, "%Y-%m-%d")
     
-    X_raw, y_real = [], []
-    
     while current_date <= end_date:
         date_str = current_date.strftime("%Y-%m-%d")
-        print(f"📅 Procesando: {date_str}", end=" ", flush=True)
+        games = predictor.loader.get_schedule(date_str)
         
-        games = loader.get_schedule(date_str)
-        if not games:
-            print("[-] Sin juegos")
-        else:
-            count = 0
-            for game in games:
-                if game['status'] == 'Final':
-                    try:
-                        res = predictor.predict_game(game)
-                        if 'error' in res: continue
+        for game in games:
+            if game['status'] == 'Final':
+                try:
+                    res = predictor.predict_game(game)
+                    h_odds, a_odds = get_historical_odds(date_str, game['home_name'])
+                    
+                    if h_odds and a_odds:
+                        fair_h, fair_a = get_fair_prob(h_odds, a_odds)
+                        prob = res['home_prob']
+                        edge = prob - fair_h # Edge sobre el precio justo
                         
-                        # Guardamos la probabilidad vs el resultado real
-                        X_raw.append(res['home_prob'])
-                        y_real.append(1 if game['real_winner'] == game['home_name'] else 0)
-                        count += 1
-                    except: continue
-            print(f"OK ({count} juegos)")
-        
+                        # Solo calibramos picks donde el modelo vio valor real
+                        if abs(edge) > 0.02:
+                            X_raw.append(prob)
+                            y_real.append(1 if game['real_winner'] == game['home_name'] else 0)
+                            
+                            # Simulación de P&L
+                            bets_count += 1
+                            actual_winner_home = (game['real_winner'] == game['home_name'])
+                            pick_is_home = (edge > 0)
+                            
+                            if (pick_is_home and actual_winner_home) or (not pick_is_home and not actual_winner_home):
+                                o = h_odds if pick_is_home else a_odds
+                                units_won += (o/100 if o > 0 else 100/abs(o))
+                            else:
+                                units_won -= 1.0
+                except: continue
         current_date += timedelta(days=1)
-        
+
+    # --- RESULTADOS FINALES ---
     if len(X_raw) > 50:
-        print(f"\n🔧 Entrenando con {len(X_raw)} muestras...")
-        iso_reg = IsotonicRegression(out_of_bounds='clip')
-        iso_reg.fit(X_raw, y_real)
+        roi = (units_won / bets_count) * 100
+        print(f"\n📊 RESULTADO: ROI {roi:+.2f}% | Net: {units_won:+.2f}u | Muestra: {bets_count}")
         
+        iso_reg = IsotonicRegression(out_of_bounds='clip').fit(X_raw, y_real)
         with open('isotonic_calibrator.pkl', 'wb') as f:
             pickle.dump(iso_reg, f)
-        print("✅ ¡Calibrador V17.0 guardado con éxito!")
+        print("✅ Calibrador guardado.")
     else:
-        print("\n❌ Error: No hay suficientes datos en este rango.")
+        print("\n❌ Muestra insuficiente para calibrar.")
 
 if __name__ == "__main__":
     train_isotonic_calibrator()

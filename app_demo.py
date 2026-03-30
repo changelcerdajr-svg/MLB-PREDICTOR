@@ -234,12 +234,12 @@ else:
             # 3. Cálculo de Edge Institucional (Sin Vig)
             fair_h, fair_a = get_fair_prob(h_odds, a_odds) if h_odds else (0.5, 0.5)
             market_prob_clean = fair_h if pick == g['home_name'] else fair_a
-            curr_odds = h_odds if pick == g['home_name'] else a_odds # <--- Crucial
+            curr_odds = h_odds if pick == g['home_name'] else a_odds
             
             edge_report = calculate_edge(prob, market_prob_clean)
             edge = edge_report['edge']
-            edge_display = edge_report['edge_pct']
             verdict = edge_report['verdict']
+            kelly_fraction = edge_report['kelly'] # Consumimos el Kelly real validado
 
             # 4. Asignación de Grado
             if "HIGH" in verdict: grade = "<span class='badge badge-a'>GRADE A</span>"
@@ -263,13 +263,34 @@ else:
             """
             st.markdown(html_main, unsafe_allow_html=True)
 
+            # 5. Panel de Diagnóstico Cuantitativo (El "Por Qué")
+            with st.expander("VER DIAGNÓSTICO DEL MODELO (STATCAST & MONTE CARLO)", expanded=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Métricas de Lanzadores (xERA):**")
+                    st.code(res['details']['pitching'])
+                    st.markdown("**Estado del Bullpen (Fatiga):**")
+                    st.code(res['details']['fatigue'])
+                with col2:
+                    st.markdown("**Sensibilidad de Simulación:**")
+                    st.code(res['details']['sensitivity'])
+                    st.markdown("**Calidad del Lineup (Splits vs L/R):**")
+                    st.code(res['details']['lineup'])
+
+            # 6. Módulo de Inversión Unificado
             if curr_odds and edge > 0:
-                rec_bet, ev = calc_kelly_and_ev(prob, curr_odds)
+                bankroll = 10000.0 # Esto podría venir de tu tracker en el futuro
+                rec_bet = bankroll * kelly_fraction
+                
+                # Cálculo de Valor Esperado (EV) usando matemática decimal
+                b = (curr_odds / 100) if curr_odds > 0 else (100 / abs(curr_odds))
+                ev = (prob * (rec_bet * b)) - ((1 - prob) * rec_bet)
+                
                 st.markdown(f"""
                 <div class='invest-box'>
-                    <div><div class='data-label'>APPROVED</div><div style='font-size:1.5em; font-weight:800;'>${rec_bet:.2f}</div></div>
-                    <div style='text-align:right;'><div class='data-label'>EV</div><div class='text-green' style='font-weight:800;'>+${ev:.2f}</div></div>
+                    <div><div class='data-label'>APPROVED ALLOCATION</div><div style='font-size:1.5em; font-weight:800;'>${rec_bet:.2f}</div></div>
+                    <div style='text-align:right;'><div class='data-label'>EXPECTED VALUE</div><div class='text-green' style='font-weight:800;'>+${ev:.2f}</div></div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.markdown("<div class='invest-box blocked'><div class='data-label'>ALLOCATION BLOCKED</div></div>", unsafe_allow_html=True)
+                st.markdown("<div class='invest-box blocked'><div class='data-label'>ALLOCATION BLOCKED (NEGATIVE EDGE)</div></div>", unsafe_allow_html=True)

@@ -105,38 +105,41 @@ class FeatureEngine:
         capped_fatigue = min(fatigue, 0.45)
         return max(2.0, (prevention_score * ff_value) + capped_fatigue)
     
-    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, k9_adj=1.0, hfa=1.04):
-        # 1. Normalización de la defensa contra el entorno de la liga
+    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, h_k9=9.0, a_k9=9.0, hfa=1.04):
         a_def_scalar = a_def / league_avg_runs
         h_def_scalar = h_def / league_avg_runs
 
-        # 2. Cálculo de Lambdas base (Carreras Esperadas por equipo)
-        # hfa viene del diccionario dinámico STADIUM_HFA
         h_lambda = (h_pow * a_def_scalar) * hfa
-        a_lambda = (a_pow * h_def_scalar) * (2.0 - hfa) # Simetría para el visitante
+        a_lambda = (a_pow * h_def_scalar) * (2.0 - hfa) 
 
-        # 3. Modelado de Incertidumbre de Talento (Nivel 4)
-        # Sampleamos mu de una distribución normal para simular varianza de rendimiento
-        h_lambda_dist = np.random.normal(h_lambda, h_lambda * 0.05, rounds)
-        a_lambda_dist = np.random.normal(a_lambda, a_lambda * 0.05, rounds)
+        # --- MODELADO DE VOLATILIDAD DEL PITCHER (NIVEL 10) ---
+        # Volatilidad base = 8% (0.08). Ajustamos inversamente según K/9.
+        # Max limitamos a 4.0 para evitar divisiones extremas si un pitcher novato tiene K/9 irreal.
         
-        # 4. Ajuste de Volatilidad (VMR) basado en Factor de Parque y K9
+        # OJO A LA FÍSICA: Las carreras del Local (h) sufren la volatilidad del pitcher Visitante (a)
+        a_pitcher_vol = 0.08 * (9.0 / max(4.0, a_k9)) 
+        h_pitcher_vol = 0.08 * (9.0 / max(4.0, h_k9))
+
+        # Sampleamos la incertidumbre de talento específica para CADA lanzador
+        h_lambda_dist = np.random.normal(h_lambda, h_lambda * a_pitcher_vol, rounds)
+        a_lambda_dist = np.random.normal(a_lambda, a_lambda * h_pitcher_vol, rounds)
+        # ------------------------------------------------------
+
+        # Ajuste VMR general para la Binomial Negativa
+        avg_k9 = (h_k9 + a_k9) / 2.0
+        k9_adj = 9.0 / max(1.0, avg_k9)
         target_vmr = 1.8 * pf * max(0.92, min(1.08, k9_adj)) 
         
-        # 5. Generador de Carreras vía Binomial Negativa (Cluster de carreras)
         def nbinom_sample(mu, vmr, size):
-            # mu puede ser un array gracias a las distribuciones anteriores
-            if np.any(mu <= 0): mu = np.maximum(mu, 0.001) 
+            mu = np.maximum(mu, 0.001) # Protección contra valores negativos de la distribución normal
             safe_vmr = max(1.05, vmr) 
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
             return np.random.negative_binomial(r, p, size)
 
-        # 6. Ejecución de la Simulación
         h_scores = nbinom_sample(h_lambda_dist, target_vmr, rounds)
         a_scores = nbinom_sample(a_lambda_dist, target_vmr, rounds)
         
-        # 7. Resolución de Probabilidades (Inyectando 0.5 para empates)
         wins_array = (h_scores > a_scores).astype(float)
         ties_mask = (h_scores == a_scores)
         wins_array[ties_mask] = 0.5 

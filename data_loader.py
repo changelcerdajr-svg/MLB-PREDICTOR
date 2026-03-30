@@ -174,12 +174,20 @@ class MLBDataLoader:
         current_ip = 0.0
         current_k9 = 7.5 # Promedio por defecto
         
+        # --- FUNCIÓN DE SEGURIDAD PARA CONVERTIR TEXTO A DECIMAL ---
+        def safe_float(val, default):
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return default
+                
         if ip_data and 'stats' in ip_data and ip_data['stats']:
             splits = ip_data['stats'][0].get('splits', [])
             if splits:
                 s = splits[0]['stat']
-                current_ip = float(s.get('inningsPitched', 0.0))
-                current_k9 = float(s.get('strikeoutsPer9Inn', 7.5))
+                # Usamos la función de seguridad para evitar el error de '-.--'
+                current_ip = safe_float(s.get('inningsPitched', 0.0), 0.0)
+                current_k9 = safe_float(s.get('strikeoutsPer9Inn', 7.5), 7.5)
                 
         # --- INICIO DE LA CORRECCIÓN CRÍTICA (Prior Bayesiano) ---
         
@@ -190,11 +198,12 @@ class MLBDataLoader:
         base_xera = raw_xera if raw_xera is not None else prior_xera
         
         # 3. Red de seguridad: Solo si es un novato absoluto sin histórico, usamos la media de la liga.
+        # Asegúrate de que LEAGUE_AVG_XERA y K_PITCHER_XERA estén definidos al inicio de tu archivo.
         safe_prior = prior_xera if prior_xera is not None else LEAGUE_AVG_XERA
         safe_base = base_xera if base_xera is not None else LEAGUE_AVG_XERA
         
         if current_ip > 0:
-            # 4. El Shrinkage ahora "jala" el xERA del año actual hacia el xERA HISTÓRICO del pitcher, no a 4.00
+            # 4. El Shrinkage ahora "jala" el xERA del año actual hacia el xERA HISTÓRICO del pitcher
             final_xera = ((K_PITCHER_XERA * safe_prior) + (safe_base * current_ip)) / (K_PITCHER_XERA + current_ip)
         else:
             # Si no ha lanzado ni un solo inning este año, su nivel esperado es su histórico

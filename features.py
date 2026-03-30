@@ -92,7 +92,7 @@ class FeatureEngine:
     def calculate_defense_score(self, p_stats, bullpen_stats, fatigue, fielding_factor):
         # Lógica Statcast real
         starter_xera = p_stats.get('xera', 4.00) if p_stats else 4.00
-        bullpen_era = bullpen_stats.get('era', 4.10) if bullpen_stats else 4.10
+        bullpen_era = bullpen_stats.get('fip', 4.10) if bullpen_stats else 4.10
         prevention_score = (starter_xera * 0.60) + (bullpen_era * 0.40)
         
         if isinstance(fielding_factor, dict):

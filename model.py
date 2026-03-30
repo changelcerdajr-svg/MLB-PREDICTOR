@@ -77,14 +77,19 @@ class MLBPredictor:
         
         pf = self.engine.get_park_factor(game['venue_id'])
 
-        # 7. Cálculo de Scores Base con Clima
+        # 7. Cálculo de Scores Base con Clima y Momentum Simétrico
         weather_data = self.loader.get_weather(game['venue_id'])
         
+        # El momentum multiplica a la ofensiva (anotan más)
         h_power = self.engine.calculate_power_score(h_xwoba_adj, pf, league_avg_runs, game['home_id'], game['date'], schedule_df, weather_data, game['venue_id']) * h_streak_mult
         a_power = self.engine.calculate_power_score(a_xwoba_adj, pf, league_avg_runs, game['away_id'], game['date'], schedule_df, weather_data, game['venue_id']) * a_streak_mult
         
-        h_def_ra9 = self.engine.calculate_defense_score(h_pstats, h_bullpen, h_fatigue, h_fielding)
-        a_def_ra9 = self.engine.calculate_defense_score(a_pstats, a_bullpen, a_fatigue, a_fielding)
+        # El momentum divide a la defensa (permiten menos carreras)
+        base_h_def = self.engine.calculate_defense_score(h_pstats, h_bullpen, h_fatigue, h_fielding)
+        base_a_def = self.engine.calculate_defense_score(a_pstats, a_bullpen, a_fatigue, a_fielding)
+        
+        h_def_ra9 = base_h_def / h_streak_mult
+        a_def_ra9 = base_a_def / a_streak_mult
 
         # 8. Simulación Estocástica Principal
         # VMR Ajustado: Reduce la varianza en duelos de pitchers élite (K/9 > 9.0)
@@ -112,11 +117,20 @@ class MLBPredictor:
         
         input_sensitivity = abs(prob_high - prob_low) / 2
         
-        # 10. Calibración Empírica
+        # 10. Calibración Empírica Híbrida (Recomendación del Analista)
         is_calibrated = False
+        raw_prob = win_prob
+        
         if self.calibrator is not None:
-            win_prob = float(self.calibrator.predict([win_prob])[0])
-            is_calibrated = True
+            calibrated_prob = float(self.calibrator.predict([raw_prob])[0])
+            
+            # Si el modelo tiene altísima confianza (>68% o <32%), usamos el crudo puro para no matar el Edge
+            if raw_prob > 0.68 or raw_prob < 0.32:
+                win_prob = raw_prob
+            else:
+                # Para la zona intermedia, usamos el calibrador para evitar sobreconfianza
+                win_prob = calibrated_prob
+                is_calibrated = True
 
         home_win_prob = win_prob
         away_win_prob = 1.0 - win_prob

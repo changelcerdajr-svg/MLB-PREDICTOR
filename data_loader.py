@@ -285,17 +285,32 @@ class MLBDataLoader:
         return res
 
     def get_bullpen_stats(self, team_id):
-        stats = {'era': 4.00, 'whip': 1.30}
+        stats = {'era': 4.00, 'whip': 1.30, 'fip': 4.10}
         try:
             data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'pitching'})
             if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
                 s = data['stats'][0]['splits'][0]['stat']
                 ip = float(s.get('inningsPitched', 0.0))
                 era = float(s.get('era', 4.00))
+                
+                # --- NUEVO: Cálculo de FIP (Proxy de xERA) para el Bullpen ---
+                if ip > 10:
+                    hr = int(s.get('homeRuns', 0))
+                    bb = int(s.get('baseOnBalls', 0))
+                    k = int(s.get('strikeouts', 0))
+                    # Fórmula FIP = ((13*HR) + (3*BB) - (2*K)) / IP + constante (aprox 3.20)
+                    fip = ((13 * hr) + (3 * bb) - (2 * k)) / ip + 3.20
+                else:
+                    fip = era # Fallback si hay muy pocos innings
+                # -------------------------------------------------------------
+
                 if ip < 20:
                     w = ip / 30.0 
                     era = (era * w) + (4.00 * (1-w))
+                    fip = (fip * w) + (4.10 * (1-w))
+                    
                 stats['era'] = era
+                stats['fip'] = fip
         except: pass
         return stats
 

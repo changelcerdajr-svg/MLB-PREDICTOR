@@ -1,3 +1,4 @@
+# live_odds_scraper.py - V17.9 (Búsqueda Dinámica de Columnas)
 import cloudscraper
 from bs4 import BeautifulSoup
 import json
@@ -17,27 +18,30 @@ def scrape_live_mlb_odds():
     scraper = cloudscraper.create_scraper()
     url = "https://www.vegasinsider.com/mlb/odds/las-vegas/"
     
-    print(f"🌐 Accediendo a VegasInsider ({datetime.datetime.now().strftime('%H:%M')})...")
-    
     try:
         response = scraper.get(url)
-        if response.status_code != 200:
-            print("❌ El servidor bloqueó la conexión.")
-            return None
+        if response.status_code != 200: return None
             
         soup = BeautifulSoup(response.text, 'html.parser')
-        
         trs = soup.find_all('tr')
         team_rows = [tr for tr in trs if tr.find('td', class_='game-team')]
         
-        if not team_rows:
-            print("⚠️ No se encontraron equipos. VegasInsider pudo haber cambiado su diseño nuevamente.")
-            return None
+        if not team_rows: return None
 
         live_data = []
         
-        print(f"✅ Se encontraron {len(team_rows) // 2} partidos programados.")
+        # --- NUEVA LÓGICA DE BÚSQUEDA DINÁMICA (PUNTO 10 AUDITORÍA) ---
+        header_cells = soup.find_all('th', class_='game-odds')
+        dk_index = -1
+        for idx, th in enumerate(header_cells):
+            if 'draftkings' in th.text.lower():
+                dk_index = idx
+                break
         
+        # Fallback a la columna 3 si la búsqueda falla por nombre
+        target_idx = dk_index if dk_index != -1 else 3
+        # -------------------------------------------------------------
+
         for i in range(0, len(team_rows) - 1, 2):
             away_tr = team_rows[i]
             home_tr = team_rows[i+1]
@@ -48,14 +52,12 @@ def scrape_live_mlb_odds():
             away_odds_cells = away_tr.find_all('td', class_='game-odds')
             home_odds_cells = home_tr.find_all('td', class_='game-odds')
             
-            a_odds = None
-            h_odds = None
-            
-            # DraftKings suele ser la columna 4 (indice 3)
-            dk_index = 3
-            if len(away_odds_cells) > dk_index and len(home_odds_cells) > dk_index:
-                a_span = away_odds_cells[dk_index].find('span', class_='data-moneyline')
-                h_span = home_odds_cells[dk_index].find('span', class_='data-moneyline')
+            a_odds, h_odds = None, None
+
+            # --- APLICACIÓN DEL ÍNDICE DINÁMICO ---
+            if len(away_odds_cells) > target_idx and len(home_odds_cells) > target_idx:
+                a_span = away_odds_cells[target_idx].find(attrs={"data-moneyline": True})
+                h_span = home_odds_cells[target_idx].find(attrs={"data-moneyline": True})
                 
                 if a_span: a_odds = parse_odds(a_span.text)
                 if h_span: h_odds = parse_odds(h_span.text)
@@ -77,19 +79,15 @@ def scrape_live_mlb_odds():
                 })
         
         return live_data
-
     except Exception as e:
-        print(f"❌ Error en el procesamiento: {e}")
+        print(f"❌ Error: {e}")
         return None
 
 if __name__ == "__main__":
     os.makedirs("data_odds", exist_ok=True)
     data = scrape_live_mlb_odds()
-    
     if data:
         today = datetime.datetime.now().strftime("%Y-%m-%d")
-        final_json = {today: data}
-        
         with open("data_odds/live_odds.json", "w", encoding="utf-8") as f:
-            json.dump(final_json, f, indent=4)
-        print(f"💰 Exito. Se guardaron {len(data)} lineas de momios en data_odds/live_odds.json")
+            json.dump({today: data}, f, indent=4)
+        print(f"💰 Éxito: {len(data)} juegos registrados.")

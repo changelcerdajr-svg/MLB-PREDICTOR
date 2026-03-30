@@ -1,118 +1,92 @@
-# financial.py
-# Motor de Riesgo Financiero y Gestión de Capital - V11.7
-# Corrección: Eliminación de Vig (Overround) y cálculo de Edge sobre Fair Value.
+# train_calibration.py - V17.9 (Full Audit)
+from model import MLBPredictor
+from datetime import datetime, timedelta
+from sklearn.isotonic import IsotonicRegression
+from financial import get_fair_prob
+import pickle
+import json
+import os
 
-from scipy.optimize import brentq
-
-def american_to_prob(odds: int) -> float:
-    """
-    Convierte momio americano a probabilidad implícita.
-    Ejemplo: -110 -> 0.5238 | +110 -> 0.4761
-    """
-    if odds == 0:
-        return 0.0
-    if odds > 0:
-        return 100 / (odds + 100)
-    else:
-        return abs(odds) / (abs(odds) + 100)
-
-def get_fair_prob(h_odds: int, a_odds: int) -> tuple:
-    """
-    Elimina el Vig usando el método proporcional (Overround).
-    Es un método rápido para obtener la probabilidad 'justa'.
-    Retorna (prob_home_clean, prob_away_clean)
-    """
-    p_h = american_to_prob(h_odds)
-    p_a = american_to_prob(a_odds)
-    
-    overround = p_h + p_a
-    if overround == 0:
-        return 0.5, 0.5
-        
-    return p_h / overround, p_a / overround
-
-def remove_vig(prob_home: float, prob_away: float) -> tuple:
-    """
-    Elimina el margen del casino usando el Power Method de Shin optimizado.
-    Calcula la probabilidad real (sin vig) respetando la asimetría del mercado.
-    """
-    if prob_home == 0 or prob_away == 0:
-        return 0.0, 0.0
-        
-    total_implied = prob_home + prob_away
-    margin = total_implied - 1.0
-    
-    # Si no hay margen detectable, devolvemos los valores originales
-    if margin <= 0.001:
-        return prob_home, prob_away
-        
-    # Función objetivo para el optimizador matemático
-    def objective(k):
-        p1 = (prob_home ** k) / ((prob_home ** k) + (prob_away ** k))
-        p2 = (prob_away ** k) / ((prob_home ** k) + (prob_away ** k))
-        return p1 + p2 - 1.0
-        
+# --- FUNCIÓN DE APOYO PARA LEER TUS ODDS HISTÓRICOS ---
+def get_historical_odds(date_str, home_team_name):
+    path = f'data_odds/mlb_odds_dataset.json'
+    if not os.path.exists(path): return None, None
     try:
-        # Busca el exponente k exacto donde las probabilidades sumen 1.0
-        k_opt = brentq(objective, 0.1, 10.0)
-    except (ValueError, RuntimeError):
-        # Fallback a proporción simple si la optimización falla
-        total = prob_home + prob_away
-        return prob_home / total, prob_away / total
+        with open(path, 'r') as f:
+            data = json.load(f)
+        games = data.get(date_str, [])
+        for g in games:
+            dk_home = g.get('gameView', {}).get('homeTeam', {}).get('fullName', '').lower()
+            if home_team_name.lower() in dk_home:
+                ml = g.get('odds', {}).get('moneyline', [])
+                for book in ml:
+                    if book['sportsbook'] == 'draftkings':
+                        return book['currentLine']['homeOdds'], book['currentLine']['awayOdds']
+    except: pass
+    return None, None
 
-    # Probabilidad limpia final con el exponente encontrado
-    p_home_clean = (prob_home ** k_opt) / ((prob_home ** k_opt) + (prob_away ** k_opt))
-    p_away_clean = (prob_away ** k_opt) / ((prob_home ** k_opt) + (prob_away ** k_opt))
-    
-    return p_home_clean, p_away_clean
-
-def calculate_edge(model_prob: float, market_prob_clean: float) -> dict:
-    """
-    Cruza la probabilidad del modelo contra la línea LIMPIA (sin Vig).
-    Calcula el Edge Real y la fracción de Kelly óptima (1/4 Kelly).
-    """
-    if market_prob_clean <= 0 or market_prob_clean >= 1:
-        return {
-            "edge": 0.0,
-            "edge_pct": "0.00%",
-            "kelly": 0.0,
-            "verdict": "ERROR: Probabilidades Inválidas"
-        }
-
-    # El Edge Real es sobre la probabilidad justa del mercado
-    edge = model_prob - market_prob_clean
-    
-    if edge <= 0:
-        return {
-            "edge": edge,
-            "edge_pct": f"{edge*100:.2f}%",
-            "kelly": 0.0,
-            "verdict": "NO VALUE (Negativo)"
-        }
-        
-    # --- CÁLCULO DEL CRITERIO DE KELLY ---
-    # b = Ganancia neta decimal (Fair Value)
-    decimal_odds = 1 / market_prob_clean
-    b = decimal_odds - 1
-    p = model_prob
-    q = 1 - p
-    
-    # Kelly puro (f*)
-    kelly_full = (b * p - q) / b
-    
-    # Gestión de riesgo institucional: 1/4 de Kelly (0.25)
-    quarter_kelly = max(0.0, kelly_full * 0.25)  
-    
-    if edge > 0.05:
-        verdict = "GRADE A: HIGH VALUE"
-    elif edge > 0.02:
-        verdict = "GRADE B: VALUE FOUND"
+def train_isotonic_calibrator():
+    current_year = datetime.now().year
+    if datetime.now().month < 4:
+        TRAIN_START, TRAIN_END = f"{current_year - 1}-08-15", f"{current_year - 1}-09-30"
     else:
-        verdict = "GRADE C: MARGINAL"
+        end_dt = datetime.now() - timedelta(days=1)
+        start_dt = end_dt - timedelta(days=30)
+        TRAIN_START, TRAIN_END = start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
+
+    print(f"🚀 INICIANDO AUDITORÍA Y CALIBRACIÓN: {TRAIN_START} al {TRAIN_END}")
     
-    return {
-        "edge": edge,
-        "edge_pct": f"+{edge*100:.2f}%",
-        "kelly": quarter_kelly,
-        "verdict": verdict
-    }
+    predictor = MLBPredictor(use_calibrator=False) 
+    X_raw, y_real = [], []
+    units_won, bets_count = 0.0, 0
+
+    current_date = datetime.strptime(TRAIN_START, "%Y-%m-%d")
+    end_date = datetime.strptime(TRAIN_END, "%Y-%m-%d")
+    
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y-%m-%d")
+        games = predictor.loader.get_schedule(date_str)
+        
+        for game in games:
+            if game['status'] == 'Final':
+                try:
+                    res = predictor.predict_game(game)
+                    h_odds, a_odds = get_historical_odds(date_str, game['home_name'])
+                    
+                    if h_odds and a_odds:
+                        fair_h, fair_a = get_fair_prob(h_odds, a_odds)
+                        prob = res['home_prob']
+                        edge = prob - fair_h # Edge sobre el precio justo
+                        
+                        # Solo calibramos picks donde el modelo vio valor real
+                        if abs(edge) > 0.02:
+                            X_raw.append(prob)
+                            y_real.append(1 if game['real_winner'] == game['home_name'] else 0)
+                            
+                            # Simulación de P&L
+                            bets_count += 1
+                            actual_winner_home = (game['real_winner'] == game['home_name'])
+                            pick_is_home = (edge > 0)
+                            
+                            if (pick_is_home and actual_winner_home) or (not pick_is_home and not actual_winner_home):
+                                o = h_odds if pick_is_home else a_odds
+                                units_won += (o/100 if o > 0 else 100/abs(o))
+                            else:
+                                units_won -= 1.0
+                except: continue
+        current_date += timedelta(days=1)
+
+    # --- RESULTADOS FINALES ---
+    if len(X_raw) > 50:
+        roi = (units_won / bets_count) * 100
+        print(f"\n📊 RESULTADO: ROI {roi:+.2f}% | Net: {units_won:+.2f}u | Muestra: {bets_count}")
+        
+        iso_reg = IsotonicRegression(out_of_bounds='clip').fit(X_raw, y_real)
+        with open('isotonic_calibrator.pkl', 'wb') as f:
+            pickle.dump(iso_reg, f)
+        print("✅ Calibrador guardado.")
+    else:
+        print("\n❌ Muestra insuficiente para calibrar.")
+
+if __name__ == "__main__":
+    train_isotonic_calibrator()

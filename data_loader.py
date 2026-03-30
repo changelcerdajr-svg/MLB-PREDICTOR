@@ -158,20 +158,15 @@ class MLBDataLoader:
                         # Cálculo raw con pesos de Linear Weights
                         # data_loader.py
                         raw_woba = (1.7 * obp + slg) / 2.65
-                        res = raw_woba * 0.885  # <--- Este es el "ancla" a la realidad de la liga
+                        res = raw_woba * 0.885  # Calibración V17.9
                         
             except:
-                # Si falla la API, usamos el promedio de la liga como última red de seguridad
                 res = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA
         
-        # Guardamos en caché y retornamos
+        # Guardamos en caché y retornamos inmediatamente
         self.player_history_cache[cache_key] = res
         return res
-        
-        default = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA
-        self.player_history_cache[cache_key] = default
-        return default
-
+    
     def get_pitcher_xera_stats(self, player_id, year=None):
         import datetime
         if year is None:
@@ -225,7 +220,7 @@ class MLBDataLoader:
             
         return {'xera': final_xera, 'k9': current_k9}
     
-    def get_confirmed_lineup_xwoba(self, game_pk, team_type):
+    def get_confirmed_lineup_xwoba(self, game_pk, team_type, vs_hand=None):
         try:
             box = self._get(f"game/{game_pk}/boxscore")
             if not box: return (None, False)
@@ -247,13 +242,16 @@ class MLBDataLoader:
                         # CORRECCIÓN AUDITORÍA: Usar PA (Plate Appearances) para estabilización
                         current_pa = int(stat.get('plateAppearances', 0))
                     
-                    # 1. Obtener xwOBA actual de Savant
-                    savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
+                    # 1. Obtener xwOBA específico de split desde el nuevo scraper
+                    savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year, vs_hand=vs_hand)
                     
-                    # 2. Obtener el Prior (Talento histórico)
-                    prior_xwoba = self._get_prior_stats(pid, 'hitting')
+                    # 2. Si es un novato sin split, usamos su xwOBA general como prior
+                    if savant_xwoba is None:
+                        savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
                     
-                    # 3. Lógica de Fallback: si no hay datos de este año, usamos el prior
+                    # 3. Prior histórico (también intentamos split si existe)
+                    prior_xwoba = self._get_prior_stats(pid, 'hitting') # Podrías optimizar esto a split después
+                    
                     current_val = savant_xwoba if savant_xwoba is not None else prior_xwoba
 
                     # 4. Aplicar Shrinkage Bayesiano sobre PA
@@ -504,17 +502,45 @@ class MLBDataLoader:
         return pd.DataFrame(schedule_list)
 
     def get_weather(self, vid):
-        # Diccionario de mapeo interno para sincronizar Venue con Coordenadas
+        # Diccionario de mapeo REAL: MLB Venue ID -> MLB Team ID (para coordenadas)
+        # Basado en la estructura oficial de la API de MLB
         venue_to_team = {
-            1: 108, 2: 110, 3: 139, 4: 134, 5: 114, 6: 116, 7: 118, 8: 116, 9: 111, 
-            10: 141, 11: 136, 12: 145, 13: 142, 14: 133, 15: 109, 16: 144, 17: 112, 
-            18: 113, 19: 115, 20: 158, 21: 143, 22: 119, 23: 120, 24: 137, 25: 135, 
-            26: 139, 27: 140, 28: 144, 29: 146, 30: 134, 31: 121, 32: 147, 33: 117
+            1: 108,    # Angel Stadium (LAA)
+            2: 110,    # Oriole Park (BAL)
+            3: 139,    # Tropicana Field (TB)
+            5: 114,    # Progressive Field (CLE)
+            7: 118,    # Kauffman Stadium (KC)
+            8: 116,    # Comerica Park (DET) - ID 8 corregido
+            9: 111,    # Fenway Park (BOS) - ID 9 corregido
+            10: 141,   # Rogers Centre (TOR)
+            11: 136,   # T-Mobile Park (SEA) - ID 11 corregido
+            12: 145,   # Guaranteed Rate Field (CWS)
+            13: 142,   # Target Field (MIN)
+            14: 133,   # Oakland Coliseum (OAK)
+            15: 109,   # Chase Field (AZ)
+            16: 144,   # Truist Park (ATL)
+            17: 112,   # Wrigley Field (CHC)
+            18: 113,   # Great American Ball Park (CIN)
+            19: 115,   # Coors Field (COL)
+            20: 158,   # American Family Field (MIL)
+            21: 143,   # Citizens Bank Park (PHI)
+            22: 119,   # Dodger Stadium (LAD)
+            23: 120,   # Nationals Park (WSH)
+            24: 137,   # Oracle Park (SF)
+            25: 135,   # Petco Park (SD)
+            26: 138,   # Busch Stadium (STL)
+            27: 140,   # Globe Life Field (TEX)
+            29: 146,   # loanDepot park (MIA)
+            30: 134,   # PNC Park (PIT)
+            31: 121,   # Citi Field (NYM)
+            32: 147,   # Yankee Stadium (NYY)
+            33: 117,   # Minute Maid Park (HOU)
         }
         
-        # Corrección Auditoría: Traducir ID de estadio a ID de equipo para coordenadas
-        tid = venue_to_team.get(vid, 110) 
+        # Obtenemos el ID del equipo (Team ID) para jalar las coordenadas correctas
+        tid = venue_to_team.get(vid, 110)
         c = STADIUM_COORDS.get(tid, {'lat': 40.0, 'lon': -80.0})
+        
         try:
             url = "https://api.open-meteo.com/v1/forecast"
             params = {
@@ -522,12 +548,11 @@ class MLBDataLoader:
                 'longitude': c['lon'], 
                 'current_weather': 'true'
             }
+            # Tiempo de espera de 5s para no bloquear el hilo principal
             d = requests.get(url, params=params, timeout=5).json()
             return d['current_weather']
         except: 
+            # Fallback neutral si la API de clima falla
             return {'temperature': 20, 'windspeed': 5, 'winddirection': 45}
-
-    def get_pitcher_stats(self, pid): 
-        return self.get_pitcher_xera_stats(pid)
         
     def get_pitcher_stats(self, pid): return self.get_pitcher_xera_stats(pid)

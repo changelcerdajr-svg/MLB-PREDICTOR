@@ -1,73 +1,102 @@
-# statcast_scraper.py
-# Motor de Extracción V17.1 (Organización de Directorios)
+# statcast_scraper.py - V17.9 (Resiliencia Industrial y Gestión de Datos)
 
 import pandas as pd
 import requests
 import io
 import os
+import time
 
 class StatcastScraper:
     def __init__(self):
         self.base_url = "https://baseballsavant.mlb.com/leaderboard/expected_statistics"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (MLB-Predictor-Institutional/17.9)'
         }
-        self.data_dir = "data_statcast" # Carpeta centralizada
+        self.data_dir = "data_statcast"
         self.batters_cache = {}
         self.pitchers_cache = {}
         
-        # Crear la carpeta si no existe
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
 
-    def fetch_batters(self, year):
-        url = f"{self.base_url}?type=batter&year={year}&position=&team=&min=1&csv=true"
+    def _save_atomic(self, df, file_path):
+        """Asegura que el archivo no se corrompa si el proceso se interrumpe."""
+        temp_path = file_path + ".tmp"
+        df.to_csv(temp_path, index=False)
+        os.replace(temp_path, file_path)
+
+    def fetch_batters(self, year, hand=None, force=False):
+        """Descarga xwOBA con lógica de ahorro de peticiones."""
+        file_name = f"batters_{year}_{hand}.csv" if hand else f"batters_{year}.csv"
+        file_path = os.path.join(self.data_dir, file_name)
+
+        # No descargar de nuevo si el año ya pasó y el archivo existe
+        if not force and year < 2026 and os.path.exists(file_path):
+            return True
+
+        suffix = f"&hand={hand}" if hand else ""
+        url = f"{self.base_url}?type=batter&year={year}&position=&team=&min=1&csv=true{suffix}"
+        
         try:
-            r = requests.get(url, headers=self.headers, timeout=10)
+            r = requests.get(url, headers=self.headers, timeout=15)
             if r.status_code == 200:
                 df = pd.read_csv(io.StringIO(r.text))
-                file_path = os.path.join(self.data_dir, f"batters_{year}.csv")
-                df.to_csv(file_path, index=False)
-                self.batters_cache[year] = df.set_index('player_id')['est_woba'].to_dict()
+                # Limpieza de datos: Rellenar nulos para evitar errores en Monte Carlo
+                df['est_woba'] = df['est_woba'].fillna(0.315) 
+                
+                self._save_atomic(df, file_path)
+                
+                cache_key = f"{year}_{hand}" if hand else year
+                self.batters_cache[cache_key] = df.set_index('player_id')['est_woba'].to_dict()
                 return True
         except Exception as e:
-            print(f"Error descargando batters {year}: {e}")
+            print(f"⚠️ Error Savant Batters {year}: {e}")
         return False
 
-    def fetch_pitchers(self, year):
+    def fetch_pitchers(self, year, force=False):
+        """Descarga xERA con buscador dinámico de métricas."""
+        file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
+        if not force and year < 2026 and os.path.exists(file_path):
+            return True
+
         url = f"{self.base_url}?type=pitcher&year={year}&position=&team=&min=1&csv=true"
         try:
-            r = requests.get(url, headers=self.headers, timeout=10)
+            r = requests.get(url, headers=self.headers, timeout=15)
             if r.status_code == 200:
                 df = pd.read_csv(io.StringIO(r.text))
                 
-                # Buscador dinámico de columna xERA (xera o est_era)
-                possible_cols = ['xera', 'est_era', 'expected_era']
+                possible_cols = ['xera', 'est_era', 'expected_era', 'estimated_era']
                 target_col = next((c for c in possible_cols if c in df.columns), None)
                 
                 if target_col:
-                    file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
-                    df.to_csv(file_path, index=False)
+                    df[target_col] = df[target_col].fillna(4.00)
+                    self._save_atomic(df, file_path)
                     self.pitchers_cache[year] = df.set_index('player_id')[target_col].to_dict()
                     return True
         except Exception as e:
-            print(f"Error descargando pitchers {year}: {e}")
+            print(f"⚠️ Error Savant Pitchers {year}: {e}")
         return False
 
-    def get_batter_xwoba(self, player_id, year):
-        if year not in self.batters_cache:
-            file_path = os.path.join(self.data_dir, f"batters_{year}.csv")
+    def get_batter_xwoba(self, player_id, year, vs_hand=None):
+        """Recupera xwOBA del caché o disco."""
+        cache_key = f"{year}_{vs_hand}" if vs_hand else year
+        
+        if cache_key not in self.batters_cache:
+            file_name = f"batters_{year}_{vs_hand}.csv" if vs_hand else f"batters_{year}.csv"
+            file_path = os.path.join(self.data_dir, file_name)
+            
             if os.path.exists(file_path):
                 df = pd.read_csv(file_path)
-                self.batters_cache[year] = df.set_index('player_id')['est_woba'].to_dict()
+                self.batters_cache[cache_key] = df.set_index('player_id')['est_woba'].to_dict()
             else:
-                self.fetch_batters(year)
-        return self.batters_cache.get(year, {}).get(player_id)
+                self.fetch_batters(year, hand=vs_hand)
+        
+        return self.batters_cache.get(cache_key, {}).get(player_id)
 
     def get_pitcher_xera(self, player_id, year):
+        """Recupera xERA con fallback de seguridad."""
         if year not in self.pitchers_cache:
             file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
-            
             if not os.path.exists(file_path):
                 self.fetch_pitchers(year)
             
@@ -75,23 +104,16 @@ class StatcastScraper:
                 df = pd.read_csv(file_path)
                 possible_cols = ['xera', 'est_era', 'expected_era', 'estimated_era']
                 target_col = next((c for c in possible_cols if c in df.columns), None)
-                
-                if target_col and 'player_id' in df.columns:
+                if target_col:
                     self.pitchers_cache[year] = df.set_index('player_id')[target_col].to_dict()
-                else:
-                    self.pitchers_cache[year] = {}
-            else:
-                self.pitchers_cache[year] = {}
 
         return self.pitchers_cache.get(year, {}).get(player_id)
 
 if __name__ == "__main__":
     scraper = StatcastScraper()
-    print("="*50)
-    print("SINCRONIZACIÓN DE DATOS EN CARPETA 'data_statcast'")
-    print("="*50)
-    
-    for y in [2024, 2025, 2026]:
-        print(f"🛰️ Procesando temporada {y}...")
-        if scraper.fetch_batters(y) and scraper.fetch_pitchers(y):
-            print(f"✅ Temporada {y} lista.")
+    # Sincronización inicial rápida
+    for y in [2025, 2026]:
+        scraper.fetch_batters(y)
+        scraper.fetch_pitchers(y)
+        # Pausa de cortesía para evitar rate-limiting
+        time.sleep(2)

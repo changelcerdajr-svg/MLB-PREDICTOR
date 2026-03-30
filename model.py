@@ -36,19 +36,18 @@ class MLBPredictor:
         h_bullpen = self.loader.get_bullpen_stats(game['home_id'])
         a_bullpen = self.loader.get_bullpen_stats(game['away_id'])
 
-        # 3. Lineups con xwOBA Confirmado (Estabilizado por PA)
-        h_xwoba, h_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'home')
-        a_xwoba, a_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'away')
+        # 3. Lineups con xwOBA Real (Split-Specific V17.9)
+        # Obtenemos el talento del equipo filtrado por la mano del pitcher rival
+        h_xwoba, h_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'home', vs_hand=a_hand)
+        a_xwoba, a_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'away', vs_hand=h_hand)
 
         if not h_confirmed or not a_confirmed:
-            return {'error': 'Lineups no confirmados. Operación bloqueada para evitar sesgo de dominio.'}
+            return {'error': 'Lineups no confirmados. Operación bloqueada.'}
 
-        # 4. Integración de Platoon Splits (Ponderación 70/30)
-        h_split = self.loader.get_team_stats_split(game['home_id'], a_hand)
-        a_split = self.loader.get_team_stats_split(game['away_id'], h_hand)
-        
-        h_xwoba_adj = (h_xwoba * 0.7) + (h_split['woba'] * 0.3)
-        a_xwoba_adj = (a_xwoba * 0.7) + (a_split['woba'] * 0.3)
+        # 4. Eliminación de Ponderación 70/30 (Ahora es 100% Señal Real)
+        # Ya no necesitamos h_split['woba'] porque h_xwoba ya trae el split de Savant
+        h_xwoba_adj = h_xwoba 
+        a_xwoba_adj = a_xwoba
 
         # 5. Ajustes Biomecánicos y Balísticos (Checklist Auditoría)
         

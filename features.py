@@ -6,38 +6,39 @@ import math
 from config import PARK_FACTORS
 
 # Base empírica de orientaciones (Grados desde el Norte geográfico hacia el CF)
+# Grados desde el Norte geográfico (0°) hacia el Center Field
+# Sincronizado con los Venue IDs oficiales de la API de MLB
 STADIUM_AZIMUTHS = {
-    1: 45,    # Angel Stadium (NE)
-    2: 45,    # Oriole Park (NE)
-    3: 180,   # Tropicana Field (S - Domo)
-    5: 45,    # Progressive Field (NE)
-    7: 135,   # Kauffman Stadium (SE)
-    8: 135,   # Comerica Park (SE)
-    9: 45,    # Fenway Park (NE)
-    10: 45,   # Rogers Centre (NE)
-    11: 135,  # T-Mobile Park (SE)
-    12: 135,  # Guaranteed Rate Field (SE)
-    13: 45,   # Target Field (NE)
-    14: 45,   # Oakland Coliseum (NE)
-    15: 0,    # Chase Field (N)
-    16: 90,   # Truist Park (E)
-    17: 45,   # Wrigley Field (NE)
-    18: 90,   # Great American Ball Park (E)
-    19: 0,    # Coors Field (N)
-    20: 45,   # Miller Park (NE)
-    21: 45,   # Citizens Bank Park (NE)
-    22: 180,  # Dodger Stadium (S)
-    23: 135,  # Nationals Park (SE)
-    24: 90,   # Oracle Park (E)
-    25: 45,   # Petco Park (NE)
-    26: 45,   # Busch Stadium (NE)
-    27: 45,   # Globe Life Field (NE)
-    28: 135,  # Truist Park (SE)
-    29: 45,   # Marlins Park (NE)
-    30: 135,  # PNC Park (SE)
-    31: 45,   # Citi Field (NE)
-    32: 65,   # Yankee Stadium (ENE)
-    33: 340,  # Minute Maid Park (NNW)
+    1: 45,    # Angel Stadium (LAA) - NE
+    2: 45,    # Oriole Park (BAL) - NE
+    3: 180,   # Tropicana Field (TB) - Domo (S)
+    5: 45,    # Progressive Field (CLE) - NE
+    7: 135,   # Kauffman Stadium (KC) - SE
+    8: 135,   # Comerica Park (DET) - SE
+    9: 45,    # Fenway Park (BOS) - NE
+    10: 45,   # Rogers Centre (TOR) - NE
+    11: 135,  # T-Mobile Park (SEA) - SE
+    12: 135,  # Guaranteed Rate Field (CWS) - SE
+    13: 45,   # Target Field (MIN) - NE
+    14: 45,   # Oakland Coliseum (OAK) - NE
+    15: 0,    # Chase Field (AZ) - N
+    16: 90,   # Truist Park (ATL) - E
+    17: 45,   # Wrigley Field (CHC) - NE
+    18: 90,   # Great American Ball Park (CIN) - E
+    19: 0,    # Coors Field (COL) - N
+    20: 45,   # American Family Field (MIL) - NE
+    21: 45,   # Citizens Bank Park (PHI) - NE
+    22: 180,  # Dodger Stadium (LAD) - S
+    23: 135,  # Nationals Park (WSH) - SE
+    24: 90,   # Oracle Park (SF) - E
+    25: 45,   # Petco Park (SD) - NE
+    26: 45,   # Busch Stadium (STL) - NE
+    27: 45,   # Globe Life Field (TEX) - NE
+    29: 45,   # loanDepot park (MIA) - NE
+    30: 135,  # PNC Park (PIT) - SE
+    31: 45,   # Citi Field (NYM) - NE
+    32: 65,   # Yankee Stadium (NYY) - ENE
+    33: 340,  # Minute Maid Park (HOU) - NNW
 }
 
 class FeatureEngine:
@@ -105,26 +106,37 @@ class FeatureEngine:
         return max(2.0, (prevention_score * ff_value) + capped_fatigue)
     
     def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, k9_adj=1.0, hfa=1.04):
+        # 1. Normalización de la defensa contra el entorno de la liga
         a_def_scalar = a_def / league_avg_runs
         h_def_scalar = h_def / league_avg_runs
 
-        # CORRECCIÓN AUDITORÍA: El factor de localía (HFA) ya no es fijo.
-        # hfa viene del diccionario específico del estadio.
+        # 2. Cálculo de Lambdas base (Carreras Esperadas por equipo)
+        # hfa viene del diccionario dinámico STADIUM_HFA
         h_lambda = (h_pow * a_def_scalar) * hfa
         a_lambda = (a_pow * h_def_scalar) * (2.0 - hfa) # Simetría para el visitante
+
+        # 3. Modelado de Incertidumbre de Talento (Nivel 4)
+        # Sampleamos mu de una distribución normal para simular varianza de rendimiento
+        h_lambda_dist = np.random.normal(h_lambda, h_lambda * 0.05, rounds)
+        a_lambda_dist = np.random.normal(a_lambda, a_lambda * 0.05, rounds)
         
+        # 4. Ajuste de Volatilidad (VMR) basado en Factor de Parque y K9
         target_vmr = 1.8 * pf * max(0.92, min(1.08, k9_adj)) 
         
+        # 5. Generador de Carreras vía Binomial Negativa (Cluster de carreras)
         def nbinom_sample(mu, vmr, size):
-            if mu <= 0: return np.zeros(size)
+            # mu puede ser un array gracias a las distribuciones anteriores
+            if np.any(mu <= 0): mu = np.maximum(mu, 0.001) 
             safe_vmr = max(1.05, vmr) 
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
             return np.random.negative_binomial(r, p, size)
 
-        h_scores = nbinom_sample(h_lambda, target_vmr, rounds)
-        a_scores = nbinom_sample(a_lambda, target_vmr, rounds)
+        # 6. Ejecución de la Simulación
+        h_scores = nbinom_sample(h_lambda_dist, target_vmr, rounds)
+        a_scores = nbinom_sample(a_lambda_dist, target_vmr, rounds)
         
+        # 7. Resolución de Probabilidades (Inyectando 0.5 para empates)
         wins_array = (h_scores > a_scores).astype(float)
         ties_mask = (h_scores == a_scores)
         wins_array[ties_mask] = 0.5 

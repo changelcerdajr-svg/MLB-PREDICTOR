@@ -104,12 +104,14 @@ class FeatureEngine:
         capped_fatigue = min(fatigue, 0.45)
         return max(2.0, (prevention_score * ff_value) + capped_fatigue)
     
-    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, k9_adj=1.0):
+    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, k9_adj=1.0, hfa=1.04):
         a_def_scalar = a_def / league_avg_runs
         h_def_scalar = h_def / league_avg_runs
 
-        h_lambda = (h_pow * a_def_scalar) * 1.04 
-        a_lambda = (a_pow * h_def_scalar) * 0.96
+        # CORRECCIÓN AUDITORÍA: El factor de localía (HFA) ya no es fijo.
+        # hfa viene del diccionario específico del estadio.
+        h_lambda = (h_pow * a_def_scalar) * hfa
+        a_lambda = (a_pow * h_def_scalar) * (2.0 - hfa) # Simetría para el visitante
         
         target_vmr = 1.8 * pf * max(0.92, min(1.08, k9_adj)) 
         

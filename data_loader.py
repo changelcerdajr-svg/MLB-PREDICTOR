@@ -37,20 +37,28 @@ class MLBDataLoader:
     def _get(self, endpoint, params=None):
         try:
             url = f"{API_URL}/{endpoint}"
-            r = self.session.get(url, params=params, timeout=6)
+            # AUMENTADO A 15 SEGUNDOS: Las peticiones históricas pesadas tardan más
+            r = self.session.get(url, params=params, timeout=15)
             r.raise_for_status()
             return r.json()
-        except: return None
+        except Exception as e: 
+            print(f"\n[!] ERROR DE CONEXIÓN API ({endpoint}): {e}")
+            return None
 
     def get_schedule(self, date_str):
         """Obtiene el calendario de juegos de la API de MLB para una fecha dada."""
-        self.current_season_year = int(date_str[:4]) # Línea restaurada
+        self.current_season_year = int(date_str[:4])
         
         params = {'sportId': 1, 'date': date_str, 'hydrate': 'lineups,probablePitcher,team'}
         data = self._get("schedule", params)
         games_list = []
         
-        if not data or 'dates' not in data or not data['dates']:
+        if not data:
+            print(f"  [X] API devolvió vacío para {date_str} (Revisa tu conexión o Timeout)")
+            return []
+            
+        if 'dates' not in data or not data['dates']:
+            print(f"  [-] No hay juegos programados por la MLB el {date_str}")
             return []
             
         for date_item in data['dates']:
@@ -63,7 +71,10 @@ class MLBDataLoader:
                     h_pitcher = g['teams']['home'].get('probablePitcher', {}).get('id')
                     a_pitcher = g['teams']['away'].get('probablePitcher', {}).get('id')
                     
-                    if not h_pitcher or not a_pitcher: continue
+                    if not h_pitcher or not a_pitcher: 
+                        # AHORA EL MODELO NOS AVISARÁ SI DESCARTA EL JUEGO POR ESTO
+                        # print(f"  -> Omitido: Falta Abridor en {g['teams']['away']['team']['name']} vs {g['teams']['home']['team']['name']}")
+                        continue
 
                     game_info = {
                         'id': g['gamePk'],
@@ -71,10 +82,10 @@ class MLBDataLoader:
                         'status': g['status']['abstractGameState'],
                         'venue_id': g['venue']['id'],
                         'home_id': g['teams']['home']['team']['id'],
-                        'home_name': g['teams']['home']['team']['name'],  # <-- CORREGIDO AQUÍ
+                        'home_name': g['teams']['home']['team']['name'],
                         'home_pitcher': h_pitcher,
                         'away_id': g['teams']['away']['team']['id'],
-                        'away_name': g['teams']['away']['team']['name'],  # <-- CORREGIDO AQUÍ
+                        'away_name': g['teams']['away']['team']['name'],
                         'away_pitcher': a_pitcher,
                         'real_winner': None
                     }
@@ -87,6 +98,7 @@ class MLBDataLoader:
                     games_list.append(game_info)
                 except Exception as e:
                     continue
+                    
         return games_list
 
     def get_league_run_environment(self, date_str):
@@ -123,38 +135,37 @@ class MLBDataLoader:
         
         prev_year = self.current_season_year - 1
         
-        # Primero intentamos sacar el dato histórico desde Baseball Savant
+        # 1. Intentamos primero con los datos de Baseball Savant
         if stat_group == 'hitting':
             res = self.savant.get_batter_xwoba(pid, prev_year)
-            if res is not None:
-                self.player_history_cache[cache_key] = res
-                return res
         else:
             res = self.savant.get_pitcher_xera(pid, prev_year)
-            if res is not None:
-                self.player_history_cache[cache_key] = res
-                return res
 
-        # Fallback a OPS/FIP histórico si falla Savant
-        try:
-            data = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': stat_group, 'season': prev_year})
-            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                stat = data['stats'][0]['splits'][0]['stat']
-                if stat_group == 'hitting':
-                    ops = float(stat.get('ops', 0.720))
-                    res = ops * (0.315 / 0.720) # Conversión aproximada para el año anterior
-                else:
-                    ip = float(stat.get('inningsPitched', 1.0))
-                    if ip > 10:
-                        hr = int(stat.get('homeRuns', 0))
-                        bb = int(stat.get('baseOnBalls', 0))
-                        k = int(stat.get('strikeouts', 0))
-                        res = ((13 * hr) + (3 * bb) - (2 * k)) / ip + 3.20
+        # 2. PUNTO 4 AUDITORÍA: Fallback técnico si Savant no tiene datos
+        if res is None:
+            try:
+                # Realizamos la petición a la API de MLB para obtener estadísticas tradicionales
+                data = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': stat_group, 'season': prev_year})
+                
+                if data and 'stats' in data and data['stats'][0].get('splits'):
+                    # Definimos 'stat' extrayendo el primer split de la temporada anterior
+                    stat = data['stats'][0]['splits'][0]['stat']
+                    
+                    if stat_group == 'hitting':
+                        # Usamos la fórmula de pesos lineales (OBP vs SLG) en lugar de OPS lineal
+                        obp = float(stat.get('onBasePct', 0.320))
+                        slg = float(stat.get('slugging', 0.400))
+                        res = (1.7 * obp + slg) / 2.65
                     else:
+                        # Para lanzadores usamos el ERA como base del Prior
                         res = float(stat.get('era', LEAGUE_AVG_XERA))
-                self.player_history_cache[cache_key] = res
-                return res
-        except: pass
+            except:
+                # Si falla la API, usamos el promedio de la liga como última red de seguridad
+                res = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA
+        
+        # Guardamos en caché y retornamos
+        self.player_history_cache[cache_key] = res
+        return res
         
         default = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA
         self.player_history_cache[cache_key] = default
@@ -221,35 +232,36 @@ class MLBDataLoader:
             if not batters_ids: return (None, False)
             
             ids_str = ",".join([str(x) for x in batters_ids])
-            # MLB API solo para volumen (At Bats)
             people_data = self._get("people", {'personIds': ids_str, 'hydrate': 'stats(group=[hitting],type=[season])'})
             
             xwoba_map = {}
             if people_data and 'people' in people_data:
                 for p in people_data['people']:
                     pid = p['id']
-                    current_ab = 0
+                    current_pa = 0 
                     
                     s = p.get('stats', [])
                     if s and s[0].get('splits'):
                         stat = s[0]['splits'][0]['stat']
-                        current_ab = int(stat.get('atBats', 0))
+                        # CORRECCIÓN AUDITORÍA: Usar PA (Plate Appearances) para estabilización
+                        current_pa = int(stat.get('plateAppearances', 0))
                     
-                    # Extraemos el xwOBA real desde Savant
+                    # 1. Obtener xwOBA actual de Savant
                     savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
                     
-                    if savant_xwoba is not None:
-                        current_xwoba = savant_xwoba
-                    else:
-                        # Fallback a OPS convertido si Savant no tiene el dato
-                        try:
-                            ops = float(s[0]['splits'][0]['stat'].get('ops', 0.720))
-                            current_xwoba = ops * (0.315 / 0.720)
-                        except:
-                            current_xwoba = LEAGUE_AVG_XWOBA
-
+                    # 2. Obtener el Prior (Talento histórico)
                     prior_xwoba = self._get_prior_stats(pid, 'hitting')
-                    projected_xwoba = self._apply_bayesian_shrinkage(current_xwoba, current_ab, K_BATTER_XWOBA, prior_xwoba)
+                    
+                    # 3. Lógica de Fallback: si no hay datos de este año, usamos el prior
+                    current_val = savant_xwoba if savant_xwoba is not None else prior_xwoba
+
+                    # 4. Aplicar Shrinkage Bayesiano sobre PA
+                    projected_xwoba = self._apply_bayesian_shrinkage(
+                        current_val, 
+                        current_pa, 
+                        K_BATTER_XWOBA, 
+                        prior_xwoba
+                    )
                     xwoba_map[pid] = projected_xwoba
 
             weights = [1.32, 1.28, 1.15, 1.05, 1.00, 0.92, 0.85, 0.78, 0.65] 
@@ -266,12 +278,11 @@ class MLBDataLoader:
                     total_weight += w
                     
             if total_weight > 0: 
-                lineup_variance = np.std(xwoba_values_list) if len(xwoba_values_list) > 0 else 0
-                cohesion_factor = 1.0 + (0.05 * (0.04 - lineup_variance))
-                final_xwoba = (weighted_sum / total_weight) * cohesion_factor
+                # ELIMINADO: cohesion_factor (Punto 7 del Checklist - Ruido estadístico)
+                final_xwoba = (weighted_sum / total_weight)
                 return (final_xwoba, True)
         except Exception as e: 
-            pass
+            print(f"Error en lineup xwOBA: {e}")
         return (None, False)
 
     # El resto de las funciones se mantienen sin cambios estructurales
@@ -296,6 +307,20 @@ class MLBDataLoader:
                     return so / pa
         except: pass
         return 0.22 # Promedio histórico de la liga (22% de ponches)
+    
+    def get_batted_ball_profile(self, entity_id, is_pitcher=False):
+        # Devuelve el ratio GO/AO (Ground Outs to Air Outs)
+        try:
+            group = 'pitching' if is_pitcher else 'hitting'
+            endpoint = f"people/{entity_id}/stats" if is_pitcher else f"teams/{entity_id}/stats"
+            data = self._get(endpoint, {'stats': 'season', 'group': group})
+            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
+                s = data['stats'][0]['splits'][0]['stat']
+                go_ao = float(s.get('groundOutsToAirOuts', 1.0))
+                return go_ao
+        except: 
+            pass
+        return 1.0 # Promedio neutral de la liga
 
     def get_bullpen_stats(self, team_id):
         stats = {'era': 4.00, 'whip': 1.30, 'fip': 4.10}
@@ -334,9 +359,13 @@ class MLBDataLoader:
             data = self._get(f"teams/{team_id}/stats", {'stats': 'vsOpponents', 'group': 'hitting', 'sitCodes': split_code})
             if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
                 s = data['stats'][0]['splits'][0]['stat']
-                # Transformamos el OPS del split a la escala wOBA (ya que Savant no da splits tan fácil)
-                ops = float(s.get('ops', 0.720))
-                stats['woba'] = ops * (0.315 / 0.720)
+                
+                # CORRECCIÓN AUDITORÍA (Punto 4): Separación de componentes OBP/SLG en splits
+                obp = float(s.get('onBasePct', 0.315))
+                slg = float(s.get('slugging', 0.410))
+                
+                # Aplicamos la misma escala técnica para normalizar a wOBA
+                stats['woba'] = (1.7 * obp + slg) / 2.65
         except: pass
         return stats
     
@@ -382,17 +411,19 @@ class MLBDataLoader:
         except: return {'l10': 0.5, 'streak': 0}
 
     def get_bullpen_fatigue(self, team_id, game_date):
-        fatigue_score = 0.0
+        fatigue_penalty = 0.0
         try:
             import datetime 
             date_obj = datetime.datetime.strptime(game_date, "%Y-%m-%d")
             
-            # En inicio de temporada (Marzo/Abril) asumimos que los brazos están frescos
+            # En inicio de temporada asumimos brazos frescos
             if date_obj.month == 3 or (date_obj.month == 4 and date_obj.day <= 7): 
                 return 0.0 
             
-            # Analizamos la carga de trabajo REAL en las últimas 48 horas
-            for i in range(1, 3): 
+            pitcher_workload = {}
+            
+            # Analizamos la carga de trabajo nominal en las ultimas 72 horas (3 dias)
+            for i in range(1, 4): 
                 prev_date = (date_obj - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 data = self._get("schedule", {'sportId': 1, 'date': prev_date, 'teamId': team_id, 'gameType': 'R'})
                 
@@ -401,29 +432,52 @@ class MLBDataLoader:
                         if g['status']['abstractGameState'] == 'Final':
                             game_pk = g['gamePk']
                             
-                            # --- NUEVO: Extraemos el boxscore real para contar los brazos usados ---
                             box = self._get(f"game/{game_pk}/boxscore")
                             if box:
                                 team_side = 'home' if g['teams']['home']['team']['id'] == team_id else 'away'
-                                p_stats = box['teams'][team_side]['teamStats']['pitching']
+                                players = box['teams'][team_side]['players']
                                 
-                                # Contamos cuántos pitchers se subieron a la lomita en total
-                                pitchers_used = int(p_stats.get('pitchersUsed', 1))
-                                relievers_used = max(0, pitchers_used - 1) # Restamos al abridor
-                                
-                                # Aplicamos penalización matemática (Castiga el doble si el cansancio fue ayer)
-                                if relievers_used >= 5: # Juego de extra innings o paliza (Bullpen destruido)
-                                    fatigue_score += 0.25 if i == 1 else 0.15
-                                elif relievers_used == 4: # Uso intenso
-                                    fatigue_score += 0.15 if i == 1 else 0.08
-                                elif relievers_used == 3: # Uso regular
-                                    fatigue_score += 0.08 if i == 1 else 0.04
+                                # Extraemos el ID y los pitcheos de cada jugador que vio accion
+                                for p_id, p_data in players.items():
+                                    stats = p_data.get('stats', {}).get('pitching', {})
+                                    pitches = stats.get('numberOfPitches', 0)
                                     
-            # Tope máximo de penalización para no sobre-castigar el modelo
-            return min(0.45, fatigue_score) 
+                                    if pitches > 0:
+                                        # Filtro para ignorar al abridor (asumimos > 75 pitcheos)
+                                        if pitches > 75:
+                                            continue
+                                            
+                                        if p_id not in pitcher_workload:
+                                            pitcher_workload[p_id] = {'days_pitched': 0, 'pitches_yesterday': 0}
+                                            
+                                        pitcher_workload[p_id]['days_pitched'] += 1
+                                        if i == 1: # Si fue el juego de ayer
+                                            pitcher_workload[p_id]['pitches_yesterday'] = pitches
+
+            # Calculamos exactamente cuantos brazos clave estan inhabilitados hoy
+            unavailable_arms = 0
+            for p_id, work in pitcher_workload.items():
+                # Regla de fatiga 1: Lanzo en dias consecutivos (2 o mas en los ultimos 3 dias)
+                if work['days_pitched'] >= 2:
+                    unavailable_arms += 1
+                # Regla de fatiga 2: Carga extrema ayer (Mas de 25 pitcheos)
+                elif work['pitches_yesterday'] >= 25:
+                    unavailable_arms += 1
+                    
+            # Transformamos los brazos inhabilitados en una penalizacion de carreras para el modelo
+            if unavailable_arms >= 4:
+                fatigue_penalty = 0.45  # Bullpen destruido, usaran novatos/posicion
+            elif unavailable_arms == 3:
+                fatigue_penalty = 0.30  # Uso severo, cerrador y preparador fuera
+            elif unavailable_arms == 2:
+                fatigue_penalty = 0.15  # Fatiga moderada alta
+            elif unavailable_arms == 1:
+                fatigue_penalty = 0.05  # Fatiga normal
+                
+            return fatigue_penalty
             
         except Exception as e: 
-            return 0.10 # Castigo genérico en caso de error de conexión
+            return 0.10 # Castigo generico conservador en caso de error de conexion
 
     def get_pitcher_hand(self, pid):
         if not pid: return 'R'
@@ -446,14 +500,33 @@ class MLBDataLoader:
                 for g in date_item['games']:
                     if g.get('gameType') in ['R', 'P', 'F', 'D', 'L', 'W']:
                         schedule_list.append({'date': d_str, 'away_team': g['teams']['away']['team']['id'], 'home_team': g['teams']['home']['team']['id']})
-        import pandas as pd
         return pd.DataFrame(schedule_list)
-    
-    def get_weather(self, vid):
-        c = STADIUM_COORDS.get(vid, {'lat': 40, 'lon': -80})
-        try:
-            d = requests.get("https://api.open-meteo.com/v1/forecast", params={'latitude':c['lat'], 'longitude':c['lon'], 'current_weather':'true'}, timeout=3).json()
-            return d['current_weather']
-        except: return {'temperature': 20, 'windspeed': 5, 'winddirection': 45}
 
+    def get_weather(self, vid):
+        # Diccionario de mapeo interno para sincronizar Venue con Coordenadas
+        venue_to_team = {
+            1: 108, 2: 110, 3: 139, 4: 134, 5: 114, 6: 116, 7: 118, 8: 116, 9: 111, 
+            10: 141, 11: 136, 12: 145, 13: 142, 14: 133, 15: 109, 16: 144, 17: 112, 
+            18: 113, 19: 115, 20: 158, 21: 143, 22: 119, 23: 120, 24: 137, 25: 135, 
+            26: 139, 27: 140, 28: 144, 29: 146, 30: 134, 31: 121, 32: 147, 33: 117
+        }
+        
+        # Corrección Auditoría: Traducir ID de estadio a ID de equipo para coordenadas
+        tid = venue_to_team.get(vid, 110) 
+        c = STADIUM_COORDS.get(tid, {'lat': 40.0, 'lon': -80.0})
+        try:
+            url = "https://api.open-meteo.com/v1/forecast"
+            params = {
+                'latitude': c['lat'], 
+                'longitude': c['lon'], 
+                'current_weather': 'true'
+            }
+            d = requests.get(url, params=params, timeout=5).json()
+            return d['current_weather']
+        except: 
+            return {'temperature': 20, 'windspeed': 5, 'winddirection': 45}
+
+    def get_pitcher_stats(self, pid): 
+        return self.get_pitcher_xera_stats(pid)
+        
     def get_pitcher_stats(self, pid): return self.get_pitcher_xera_stats(pid)

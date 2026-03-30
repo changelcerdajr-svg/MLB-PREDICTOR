@@ -427,7 +427,20 @@ with tab_pizarra:
         else:
             res = st.session_state.analysis_cache[game_id]
 
-        h_odds, a_odds = get_target_odds(odds_data, target_date_str, g['home_name'])
+        h_odds, a_odds = get_target_odds(odds_data, date_str, g['home_name'])
+            
+        if h_odds is not None and a_odds is not None:
+            # PUNTO 1: Limpiar el Vig antes de calcular la ventaja
+            from financial import get_fair_prob, calculate_edge
+            fair_h, fair_a = get_fair_prob(h_odds, a_odds)
+            
+            # Seleccionamos la probabilidad justa del mercado para el equipo elegido
+            market_prob_clean = fair_h if pick == g['home_name'] else fair_a
+            
+            # El análisis de Edge ahora es sobre el Fair Value, no sobre el momio sucio
+            edge_data = calculate_edge(prob, market_prob_clean)
+            edge = edge_data['edge']
+            edge_display = edge_data['edge_pct']
 
         # ── GAME HEADER ──
         is_final = g['status'] in ['Final', 'Game Over', 'Completed']

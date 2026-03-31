@@ -26,7 +26,7 @@ class StatcastScraper:
         os.replace(temp_path, file_path)
 
     def fetch_batters(self, year, hand=None, force=False):
-        """Descarga xwOBA con lógica de ahorro de peticiones."""
+        """Descarga xwOBA con lógica de ahorro de peticiones y splits reales (V18.0)."""
         file_name = f"batters_{year}_{hand}.csv" if hand else f"batters_{year}.csv"
         file_path = os.path.join(self.data_dir, file_name)
 
@@ -34,21 +34,39 @@ class StatcastScraper:
         if not force and year < 2026 and os.path.exists(file_path):
             return True
 
-        suffix = f"&hand={hand}" if hand else ""
-        url = f"{self.base_url}?type=batter&year={year}&position=&team=&min=1&csv=true{suffix}"
+        # --- CIRUGÍA DE DATOS V18.0: CAMBIO DE ENDPOINT ---
+        if hand:
+            # Para splits reales, usamos el Player Stat Search
+            url = f"https://baseballsavant.mlb.com/player-stat-search/csv?all=true&group=name&player_type=batter&position=&game_type=R&split_type=handedness&year={year}&hand={hand}&current_stat=expected&min_results=1"
+        else:
+            # Para el talento global base, mantenemos el Leaderboard
+            url = f"{self.base_url}?type=batter&year={year}&position=&team=&min=1&csv=true"
         
         try:
             r = requests.get(url, headers=self.headers, timeout=15)
             if r.status_code == 200:
                 df = pd.read_csv(io.StringIO(r.text))
-                # Limpieza de datos: Rellenar nulos para evitar errores en Monte Carlo
-                df['est_woba'] = df['est_woba'].fillna(0.315) 
                 
-                self._save_atomic(df, file_path)
+                # Baseball Savant cambia los nombres de las columnas según el endpoint
+                possible_cols = ['xwoba', 'est_woba', 'expected_woba']
+                target_col = next((c for c in possible_cols if c in df.columns), None)
                 
-                cache_key = f"{year}_{hand}" if hand else year
-                self.batters_cache[cache_key] = df.set_index('player_id')['est_woba'].to_dict()
-                return True
+                # Asegurar que el ID del jugador exista sin importar el formato del CSV
+                id_cols = ['player_id', 'id', 'batter']
+                id_col = next((c for c in id_cols if c in df.columns), 'player_id')
+                
+                if target_col and id_col in df.columns:
+                    # Limpieza y normalización
+                    df[target_col] = df[target_col].fillna(0.315) 
+                    df = df.rename(columns={target_col: 'est_woba', id_col: 'player_id'})
+                    
+                    self._save_atomic(df, file_path)
+                    
+                    cache_key = f"{year}_{hand}" if hand else year
+                    self.batters_cache[cache_key] = df.set_index('player_id')['est_woba'].to_dict()
+                    return True
+                else:
+                    print(f"⚠️ Columnas no encontradas en el CSV de Savant para {year} hand={hand}")
         except Exception as e:
             print(f"⚠️ Error Savant Batters {year}: {e}")
         return False

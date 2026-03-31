@@ -48,6 +48,11 @@ class FeatureEngine:
         return PARK_FACTORS['runs'].get(venue_id, 1.00)
 
     def calculate_weather_multiplier(self, venue_id, weather_data):
+        # Filtro A1: Domos y estadios con techo retráctil no sufren alteraciones de clima
+        DOME_VENUES = {3, 10, 15, 20, 27, 33}
+        if venue_id in DOME_VENUES:
+            return 1.0
+
         if not weather_data: return 1.0
 
         temp_c = weather_data.get('temperature', 21.0)
@@ -105,33 +110,39 @@ class FeatureEngine:
         capped_fatigue = min(fatigue, 0.45)
         return max(2.0, (prevention_score * ff_value) + capped_fatigue)
     
-    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, h_k9=9.0, a_k9=9.0, hfa=1.04):
+    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, h_k9=9.0, a_k9=9.0, h_ip=0, a_ip=0, hfa=1.04):
         a_def_scalar = a_def / league_avg_runs
         h_def_scalar = h_def / league_avg_runs
 
         h_lambda = (h_pow * a_def_scalar) * hfa
         a_lambda = (a_pow * h_def_scalar) * (2.0 - hfa) 
 
-        # --- MODELADO DE VOLATILIDAD DEL PITCHER (NIVEL 10) ---
-        # Volatilidad base = 8% (0.08). Ajustamos inversamente según K/9.
-        # Max limitamos a 4.0 para evitar divisiones extremas si un pitcher novato tiene K/9 irreal.
-        
-        # OJO A LA FÍSICA: Las carreras del Local (h) sufren la volatilidad del pitcher Visitante (a)
-        a_pitcher_vol = 0.08 * (9.0 / max(4.0, a_k9)) 
-        h_pitcher_vol = 0.08 * (9.0 / max(4.0, h_k9))
+        # --- MODELADO DE INCERTIDUMBRE GAUSSIANA V18.0 ---
+        # A menos IP, mayor es la campana de Gauss (incertidumbre del talento).
+        # Un novato (0 IP) tiene ~25% de error; un veterano (160+ IP) baja al ~5%.
+        def calculate_uncertainty(ip):
+            return 0.05 + (0.20 * math.exp(-max(0, ip) / 40.0))
 
-        # Sampleamos la incertidumbre de talento específica para CADA lanzador
-        h_lambda_dist = np.random.normal(h_lambda, h_lambda * a_pitcher_vol, rounds)
-        a_lambda_dist = np.random.normal(a_lambda, a_lambda * h_pitcher_vol, rounds)
-        # ------------------------------------------------------
+        h_unc = calculate_uncertainty(h_ip)
+        a_unc = calculate_uncertainty(a_ip)
 
-        # Ajuste VMR general para la Binomial Negativa
+        # Claridad conceptual cruzada:
+        # La incertidumbre del pitcher local (h_unc) afecta las carreras del visitante (a_vol)
+        # La incertidumbre del pitcher visitante (a_unc) afecta las carreras del local (h_vol)
+        h_vol = a_unc * (9.0 / max(4.0, a_k9))
+        a_vol = h_unc * (9.0 / max(4.0, h_k9))
+
+        h_lambda_dist = np.random.normal(h_lambda, h_lambda * h_vol, rounds)
+        a_lambda_dist = np.random.normal(a_lambda, a_lambda * a_vol, rounds)
+        # --------------------------------------------------
+    
+            # Ajuste VMR para la Binomial Negativa
         avg_k9 = (h_k9 + a_k9) / 2.0
         k9_adj = 9.0 / max(1.0, avg_k9)
         target_vmr = 1.8 * pf * max(0.92, min(1.08, k9_adj)) 
         
         def nbinom_sample(mu, vmr, size):
-            mu = np.maximum(mu, 0.001) # Protección contra valores negativos de la distribución normal
+            mu = np.maximum(mu, 0.001) 
             safe_vmr = max(1.05, vmr) 
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
@@ -144,7 +155,4 @@ class FeatureEngine:
         ties_mask = (h_scores == a_scores)
         wins_array[ties_mask] = 0.5 
         
-        win_prob = float(np.mean(wins_array))
-        bernoulli_variance = win_prob * (1.0 - win_prob)
-        
-        return win_prob, float(np.mean(h_scores)), float(np.mean(a_scores)), bernoulli_variance
+        return float(np.mean(wins_array)), float(np.mean(h_scores)), float(np.mean(a_scores)), float(np.var(wins_array))

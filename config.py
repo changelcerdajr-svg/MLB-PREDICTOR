@@ -13,72 +13,76 @@ STRESS_TEST_ROUNDS = 2000     # Para el cálculo de Sensibilidad (Stress Testing
 # > 1.00 = Favorece Ofensiva | < 1.00 = Favorece Pitcheo
 PARK_FACTORS = {
     'runs': {
-        19: 1.35,  # Coors Field (COL)
-        18: 1.12,  # Great American Ball Park (CIN)
-        9:  1.08,  # Fenway Park (BOS)
-        7:  1.06,  # Kauffman Stadium (KC)
-        12: 1.05,  # Guaranteed Rate Field (CWS)
-        33: 1.05,  # Yankee Stadium (NYY)
-        16: 1.04,  # Truist Park (ATL)
-        17: 1.04,  # Wrigley Field (CHC)
-        22: 1.04,  # Dodger Stadium (LAD)
-        4:  1.03,  # PNC Park (PIT)
-        11: 1.02,  # T-Mobile Park (SEA)
-        25: 1.02,  # Busch Stadium (STL)
-        28: 1.02,  # Globe Life Field (TEX)
-        21: 1.01,  # Citizens Bank Park (PHI)
-        2:  1.00,  # Oriole Park (BAL)
-        1:  1.00,  # Angel Stadium (LAA)
-        5:  1.00,  # Progressive Field (CLE)
-        14: 1.00,  # Oakland Coliseum (OAK)
-        15: 1.00,  # Chase Field (ARI)
-        26: 1.00,  # Tropicana Field (TB)
-        29: 1.00,  # Nationals Park (WSH)
-        3:  0.99,  # Target Field (MIN)
-        6:  0.99,  # Comerica Park (DET)
-        23: 0.98,  # loanDepot park (MIA)
-        10: 0.98,  # Rogers Centre (TOR)
-        27: 0.98,  # Oracle Park (SF)
-        31: 0.96,  # Citi Field (NYM)
-        24: 0.95,  # Minute Maid Park (HOU)
-        32: 0.94,  # American Family Field (MIL)
-        30: 0.92   # Petco Park (SD)
+        1: 0.99,   # Angel Stadium
+        2: 0.96,   # Oriole Park
+        3: 1.00,   # Tropicana Field
+        5: 1.02,   # Progressive Field
+        7: 1.03,   # Kauffman Stadium
+        8: 0.97,   # Comerica Park
+        9: 1.07,   # Fenway Park
+        10: 1.01,  # Rogers Centre
+        11: 0.92,  # T-Mobile Park
+        12: 1.01,  # Guaranteed Rate Field
+        13: 1.00,  # Target Field
+        14: 0.94,  # Oakland Coliseum
+        15: 1.00,  # Chase Field
+        16: 1.03,  # Truist Park
+        17: 1.02,  # Wrigley Field
+        18: 1.12,  # Great American Ball Park
+        19: 1.34,  # Coors Field
+        20: 1.01,  # American Family Field
+        21: 1.03,  # Citizens Bank Park
+        22: 1.00,  # Dodger Stadium
+        23: 0.97,  # Nationals Park
+        24: 0.97,  # Oracle Park
+        25: 0.90,  # Petco Park (Pitcher friendly)
+        26: 0.96,  # Busch Stadium
+        27: 1.02,  # Globe Life Field
+        29: 0.97,  # loanDepot park
+        30: 0.97,  # PNC Park
+        31: 0.95,  # Citi Field
+        32: 1.05,  # Yankee Stadium (Hitter friendly)
+        33: 0.95   # Minute Maid Park
     }
 }
 
-# 4. HOME FIELD ADVANTAGE (HFA) DINÁMICO (Punto 11 Auditoría)
-# Valores calibrados según ventaja histórica de carreras del local por estadio.
+# --- CONSTANTES DE AUDITORÍA V17.9 ---
+RAW_WOBA_REGRESSOR = 0.885 
+LINEUP_PA_VOLUME_MULTIPLIERS = [1.32, 1.28, 1.15, 1.05, 1.00, 0.92, 0.85, 0.78, 0.65]
+
+# 4. HOME FIELD ADVANTAGE (HFA) DINÁMICO
+# Mapeo oficial de HFA calibrado por Venue ID de la MLB API
 STADIUM_HFA = {
-    19: 1.065, # Coors Field (COL) - Altitud y fatiga extrema
-    26: 1.055, # Tropicana Field (TB) - Superficie y domo
-    9:  1.050, # Fenway Park (BOS) - Rebotes en el Monstruo Verde
-    17: 1.048, # Wrigley Field (CHC) - Efecto del viento
-    22: 1.046, # Dodger Stadium (LAD) - Aislamiento / Viaje
-    33: 1.045, # Yankee Stadium (NYY)
-    15: 1.045, # Chase Field (ARI)
-    18: 1.043, # Great American Ball Park (CIN)
-    11: 1.042, # T-Mobile Park (SEA)
-    16: 1.042, # Truist Park (ATL)
-    28: 1.041, # Globe Life Field (TEX)
-    10: 1.041, # Rogers Centre (TOR)
-    27: 1.040, # Oracle Park (SF)
-    25: 1.040, # Busch Stadium (STL)
+    1: 1.040,  # Angel Stadium (LAA)
+    2: 1.040,  # Oriole Park (BAL)
+    3: 1.055,  # Tropicana Field (TB) - Domo, alto rebote
+    5: 1.040,  # Progressive Field (CLE)
+    7: 1.040,  # Kauffman Stadium (KC)
+    8: 1.040,  # Comerica Park (DET)
+    9: 1.045,  # Fenway Park (BOS)
+    10: 1.045, # Rogers Centre (TOR)
+    11: 1.040, # T-Mobile Park (SEA)
+    12: 1.040, # Guaranteed Rate Field (CWS)
+    13: 1.040, # Target Field (MIN)
+    14: 1.040, # Oakland Coliseum (OAK)
+    15: 1.040, # Chase Field (AZ)
+    16: 1.040, # Truist Park (ATL)
+    17: 1.040, # Wrigley Field (CHC)
+    18: 1.040, # Great American Ball Park (CIN)
+    19: 1.060, # Coors Field (COL) - Altitud extrema
+    20: 1.040, # American Family Field (MIL)
     21: 1.040, # Citizens Bank Park (PHI)
-    2:  1.040, # Oriole Park (BAL)
-    1:  1.040, # Angel Stadium (LAA)
-    5:  1.040, # Progressive Field (CLE)
-    7:  1.039, # Kauffman Stadium (KC)
-    12: 1.039, # Guaranteed Rate Field (CWS)
-    29: 1.039, # Nationals Park (WSH)
-    3:  1.039, # Target Field (MIN)
-    6:  1.038, # Comerica Park (DET)
-    23: 1.038, # loanDepot park (MIA)
-    32: 1.038, # American Family Field (MIL)
-    4:  1.038, # PNC Park (PIT)
-    24: 1.037, # Minute Maid Park (HOU)
-    14: 1.037, # Oakland Coliseum (OAK)
-    31: 1.036, # Citi Field (NYM)
-    30: 1.035  # Petco Park (SD)
+    22: 1.040, # Dodger Stadium (LAD)
+    23: 1.040, # Nationals Park (WSH)
+    24: 1.040, # Oracle Park (SF)
+    25: 1.040, # Petco Park (SD)
+    26: 1.035, # Busch Stadium (STL)
+    27: 1.041, # Globe Life Field (TEX)
+    29: 1.040, # loanDepot park (MIA)
+    30: 1.040, # PNC Park (PIT)
+    31: 1.040, # Citi Field (NYM)
+    32: 1.045, # Yankee Stadium (NYY)
+    33: 1.037  # Minute Maid Park (HOU)
 }
 
 def get_hfa_factor(venue_id):

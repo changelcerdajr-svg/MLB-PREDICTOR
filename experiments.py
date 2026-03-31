@@ -14,72 +14,67 @@ def haversine(lat1, lon1, lat2, lon2):
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
     return R * 2 * math.asin(math.sqrt(a))
 
-def get_jetlag_index(team_id, current_game_date, schedule_df):
+# experiments.py - Modulo de Condiciones de Viaje (M1 Fix)
+
+# Mapeo de Team ID a Zona Horaria (0 = Eastern, 1 = Central, 2 = Mountain, 3 = Pacific)
+TEAM_TIMEZONES = {
+    # AL East & NL East & Algunos Central (EST)
+    110: 0, 111: 0, 147: 0, 139: 0, 141: 0, 144: 0, 146: 0, 121: 0, 143: 0, 120: 0, 113: 0, 114: 0, 116: 0, 134: 0,
+    # AL Central & NL Central & AL West Texas (CST)
+    145: 1, 118: 1, 142: 1, 112: 1, 158: 1, 138: 1, 117: 1, 140: 1,
+    # NL West & AL West Montaña (MST)
+    115: 2, 109: 2,
+    # NL West & AL West Costa (PST)
+    108: 3, 133: 3, 136: 3, 119: 3, 135: 3, 137: 3
+}
+
+def get_jetlag_index(team_id, game_date, schedule_data):
     """
-    Calcula el desgaste por viaje basado en la distancia real recorrida
-    desde el estadio de ayer hasta el estadio de hoy, SIN día de descanso.
+    Calcula el impacto biológico basado en el cambio de zona horaria real
+    entre el juego anterior y el juego de HOY.
     """
-    try:
-        current_date = pd.to_datetime(current_game_date)
-        yesterday = current_date - timedelta(days=1)
+    if schedule_data is None or schedule_data.empty:
+        return 0.0
         
-        # 1. ¿Dónde jugó ayer?
-        yesterday_games = schedule_df[
-            (pd.to_datetime(schedule_df['date']) == yesterday) & 
-            ((schedule_df['home_team'] == team_id) | (schedule_df['away_team'] == team_id))
-        ]
+    # 1. Identificamos en qué ciudad juega el equipo HOY
+    today_game = schedule_data[(schedule_data['date'] == game_date) & 
+                               ((schedule_data['away_team'] == team_id) | (schedule_data['home_team'] == team_id))]
+    
+    if today_game.empty:
+        return 0.0 # No tenemos registro de que juegue hoy
         
-        if yesterday_games.empty:
-            return 0.0 # Tuvo día de descanso, no hay jetlag
-            
-        last_game = yesterday_games.iloc[0]
-        # El venue (estadio) siempre es el del equipo local
-        yesterday_venue = last_game['home_team'] 
+    # La ciudad actual es el estadio del equipo local del juego de hoy
+    current_city_id = today_game.iloc[0]['home_team']
+
+    # 2. Filtramos el historial para ver solo juegos ANTERIORES a hoy
+    past_games = schedule_data[(pd.to_datetime(schedule_data['date']) < pd.to_datetime(game_date)) & 
+                               ((schedule_data['away_team'] == team_id) | (schedule_data['home_team'] == team_id))]
+    
+    if past_games.empty:
+        return 0.0 # Tuvo días de descanso largos o es inicio de temporada
         
-        # 2. ¿Dónde juega hoy?
-        current_games = schedule_df[
-            (pd.to_datetime(schedule_df['date']) == current_date) & 
-            ((schedule_df['home_team'] == team_id) | (schedule_df['away_team'] == team_id))
-        ]
-        
-        if current_games.empty:
-            return 0.0
-            
-        current_venue = current_games.iloc[0]['home_team']
-        
-        # 3. Si es la misma ciudad/estadio, no hay viaje
-        if yesterday_venue == current_venue:
-            return 0.0
-            
-        # 4. Calcular distancia real
-        c1 = STADIUM_COORDS.get(yesterday_venue)
-        c2 = STADIUM_COORDS.get(current_venue)
-        
-        if not c1 or not c2:
-            return 0.0 # Faltan coordenadas, asumimos 0 para no romper el modelo
-            
-        dist_km = haversine(c1['lat'], c1['lon'], c2['lat'], c2['lon'])
-        
-        # 5. Asignar índice de castigo basado en distancia
-        if dist_km > 2000: 
-            return 1.0   # Vuelo transcontinental (Ej: NY a LA)
-        elif dist_km > 800:  
-            return 0.5   # Vuelo regional largo
-        else:
-            return 0.25  # Vuelo corto en la misma costa
-            
-    except Exception as e:
+    # El último juego antes de hoy
+    last_game = past_games.iloc[-1]
+    previous_city_id = last_game['home_team']
+    
+    # 3. Calculamos la diferencia de zonas horarias reales (donde estaba vs donde está)
+    tz_prev = TEAM_TIMEZONES.get(previous_city_id, 0)
+    tz_curr = TEAM_TIMEZONES.get(current_city_id, 0) # BUG FIX: Usamos la ciudad actual
+    
+    tz_diff = tz_prev - tz_curr
+    
+    # Viajar al Este (perder horas) es peor que viajar al Oeste (ganar horas)
+    if tz_diff > 0:
+        return abs(tz_diff) * 1.5
+    elif tz_diff < 0:
+        return abs(tz_diff) * 0.8
+    else:
         return 0.0
 
-def apply_jetlag_penalty(base_power_score, jetlag_value):
+def apply_jetlag_penalty(base_score, jetlag_index):
     """
-    Aplica el castigo matemático al score ofensivo.
+    Reduce el base_score (carreras esperadas) basado en el Jet Lag cognitivo.
     """
-    if jetlag_value == 1.0:
-        return base_power_score * 0.98 # -2% poder (Transcontinental)
-    elif jetlag_value == 0.5:
-        return base_power_score * 0.99 # -1% poder (Regional)
-    elif jetlag_value == 0.25:
-        return base_power_score * 0.995 # -0.5% poder (Corto)
-        
-    return base_power_score
+    # Castigo máximo de ~4.5% para un viaje de 3 zonas al Este sin descanso
+    penalty_multiplier = max(0.95, 1.0 - (jetlag_index * 0.01))
+    return base_score * penalty_multiplier

@@ -31,11 +31,11 @@ def calculate_payout_flat(odds, stake=1.0):
     if odds > 0: return stake * (odds / 100)
     return stake * (100 / abs(odds))
 
-def calculate_kelly_stake(prob_win, american_odds):
+def calculate_kelly_stake(prob_win, american_odds, current_fraction):
     b = american_to_decimal(american_odds) - 1
     q = 1 - prob_win
     f_star = (b * prob_win - q) / b
-    return max(0, f_star * KELLY_FRACTION)
+    return max(0, f_star * current_fraction)
 
 def get_real_odds(odds_data, date_str, mlb_home_name):
     day_games = odds_data.get(date_str, [])
@@ -63,6 +63,11 @@ def run_master_backtest(start_date_str, days=45):
         'flat_profit': 0.0, 'baseline_home_wins': 0,
         'total_real_edge': 0.0
     }
+    # --- VARIABLES DE CONTROL ESTADÍSTICO (V18.0) ---
+    peak_bankroll = STARTING_BANKROLL
+    recent_edges = []
+    recent_results = []
+    recent_expected = []
 
     print("=" * 70)
     print(f"🚀 INICIANDO BACKTEST MASTER V17.9: {start_date_str} (+{days} días)")
@@ -107,8 +112,44 @@ def run_master_backtest(start_date_str, days=45):
                 continue 
             # -----------------------------------------------------------------------
 
-            # Gestión de Capital (Kelly sobre Momio Real)
-            stake_pct = calculate_kelly_stake(prob, curr_odds)
+            # --- CONTROL FINANCIERO V18.0 ---
+            
+            # 1. Drawdown Protection (Pausa de Emergencia)
+            if bankroll > peak_bankroll:
+                peak_bankroll = bankroll
+            
+            current_drawdown = (peak_bankroll - bankroll) / peak_bankroll
+            if current_drawdown >= 0.15:
+                # Quitamos el 'return' para evitar el sesgo de supervivencia
+                print(f"\n[ALERTA ROJA] DRAWDOWN DEL {current_drawdown*100:.2f}%. (El bot real se apagaría aquí)")
+                
+            # Actualizamos el historial de Edge para el Alpha Decay
+            recent_edges.append(real_edge)
+            if len(recent_edges) > 50:
+                recent_edges.pop(0)
+                
+            # 2. Monitor de Alpha Decay
+            if len(recent_edges) == 50:
+                avg_recent_edge = sum(recent_edges) / 50.0
+                if avg_recent_edge < 0.015:
+                    # Quitamos el 'return' preventivo
+                    print(f"\n[ALERTA AMARILLA] ALPHA DECAY. Edge promedio: {avg_recent_edge*100:.2f}%.")
+                    
+            # 3. Kelly Dinámico (Protección contra Varianza)
+            current_fraction = KELLY_FRACTION
+            if len(recent_results) == 30:
+                actual_win_rate = sum(recent_results) / 30.0
+                expected_win_rate = sum(recent_expected) / 30.0
+                
+                if actual_win_rate > expected_win_rate + 0.05:
+                    # Racha de suerte insostenible: Reducimos Kelly a la mitad para proteger ganancias
+                    current_fraction = KELLY_FRACTION * 0.5
+                elif actual_win_rate < expected_win_rate - 0.05:
+                    # Racha negativa severa: Reducimos Kelly para frenar la caída
+                    current_fraction = KELLY_FRACTION * 0.75
+            
+            # Gestión de Capital Final
+            stake_pct = calculate_kelly_stake(prob, curr_odds, current_fraction)
             if stake_pct <= 0: continue
             
             stake_units = bankroll * stake_pct
@@ -125,6 +166,18 @@ def run_master_backtest(start_date_str, days=45):
                 stats['flat_profit'] -= 1.0
                 bankroll -= stake_units
                 print(f"❌ {date_str} | {pick:15} | Edge: {real_edge*100:+.1f}% | -${stake_units:.2f}")
+
+            # --- AQUÍ VA EL NUEVO BLOQUE (Paso 4) ---
+            # Guardamos el resultado (1 si ganó, 0 si perdió) para medir la racha
+            recent_results.append(1 if pick == winner else 0)
+            # Guardamos la probabilidad que el modelo esperaba
+            recent_expected.append(prob)
+            
+            # Mantenemos solo los últimos 30 juegos en memoria
+            if len(recent_results) > 30:
+                recent_results.pop(0)
+                recent_expected.pop(0)
+            # ---------------------------------------- 
 
     # --- REPORTE DE ALPHA REAL ---
     print("\n" + "=" * 70)
@@ -147,5 +200,6 @@ def run_master_backtest(start_date_str, days=45):
     print("=" * 70)
 
 if __name__ == "__main__":
-    # Prueba sobre el dataset de agosto de 2025
-    run_master_backtest("2025-08-01", days=15)
+    # Backtest ciego (Out-of-sample): 90 días de la temporada 2025
+    # Evalúa el rendimiento en el entorno más volátil (Abril-Junio)
+    run_master_backtest("2025-04-01", days=90)

@@ -30,8 +30,8 @@ def train_isotonic_calibrator():
     # CONFIGURACIÓN DE ENTRENAMIENTO OVERNIGHT (V17.9)
     # Cierre de temporada 2024 (2 meses de datos ultra-estables)
     # ---------------------------------------------------------
-    TRAIN_START = "2024-08-01"
-    TRAIN_END   = "2024-10-01"
+    TRAIN_START = "2025-04-01"
+    TRAIN_END   = "2025-05-31"
 
     print(f"🚀 INICIANDO AUDITORÍA Y CALIBRACIÓN: {TRAIN_START} al {TRAIN_END}")
     
@@ -56,14 +56,20 @@ def train_isotonic_calibrator():
                     
                     if h_odds and a_odds:
                         fair_h, fair_a = get_fair_prob(h_odds, a_odds)
+                        
+                        # 🔴 Seguro temporal para ver si el modelo devolvió un error de lineups
+                        if 'error' in res:
+                            print(f"  [-] Partido omitido: {res['error']}")
+                            continue
+                            
                         prob = res['home_prob']
                         edge = prob - fair_h # Edge sobre el precio justo
                         
-                        # A2: Entrenamos el calibrador con TODOS los juegos (Eliminamos el sesgo)
+                        # A2: Entrenamos el calibrador con TODOS los juegos
                         X_raw.append(prob)
                         y_real.append(1 if game['real_winner'] == game['home_name'] else 0)
                         
-                        # Solo calculamos el P&L de auditoría si hay edge real (estrategia operativa)
+                        # Solo calculamos el P&L de auditoría si hay edge real
                         if abs(edge) > 0.02:
                             bets_count += 1
                             actual_winner_home = (game['real_winner'] == game['home_name'])
@@ -74,7 +80,12 @@ def train_isotonic_calibrator():
                                 units_won += (o/100 if o > 0 else 100/abs(o))
                             else:
                                 units_won -= 1.0
+                    else:
+                        print(f"  [-] No encontré momios en el JSON para {game['home_name']}")
+                        
                 except Exception as e: 
+                    # 🔴 EL DETECTOR DE MENTIRAS
+                    print(f"  [!] Error oculto al simular {game['away_name']} @ {game['home_name']}: {e}")
                     continue
         current_date += timedelta(days=1)
 
@@ -88,7 +99,7 @@ def train_isotonic_calibrator():
         print(f"RESULTADO FINAL AUDITORÍA V17.9")
         print(f"Muestra evaluada: {bets_count} apuestas")
         print(f"Unidades Netas:   {units_won:+.2f} u")
-        print(f"ROI Proyectado:   {roi:+.2f}%")
+        print(f"ROI Proyectado:   {roi:+.2f}%") 
         
         iso_reg = IsotonicRegression(out_of_bounds='clip').fit(X_raw, y_real)
         with open('isotonic_calibrator.pkl', 'wb') as f:

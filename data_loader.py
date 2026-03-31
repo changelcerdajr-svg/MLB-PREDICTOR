@@ -30,21 +30,47 @@ class MLBDataLoader:
         self.session.headers.update({'User-Agent': USER_AGENT})
         self.standings_cache = {} 
         self.player_history_cache = {} 
+        
+        # Declaramos los cachés aquí para que existan en todo el archivo
+        self.boxscore_cache = {} 
+        self.schedule_cache = {} 
+        
         self._force_historical_mode = False
         
         # Inicializamos el Scraper de Savant
         self.savant = StatcastScraper()
 
     def _get(self, endpoint, params=None):
-        try:
-            url = f"{API_URL}/{endpoint}"
-            # AUMENTADO A 15 SEGUNDOS: Las peticiones históricas pesadas tardan más
-            r = self.session.get(url, params=params, timeout=15)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e: 
-            print(f"\n[!] ERROR DE CONEXIÓN API ({endpoint}): {e}")
-            return None
+        import time # Importamos la librería de tiempo para poder pausar
+        url = f"{API_URL}/{endpoint}"
+        
+        while True: # Bucle infinito: intentará hasta lograrlo
+            try:
+                # AUMENTADO A 15 SEGUNDOS: Las peticiones históricas pesadas tardan más
+                r = self.session.get(url, params=params, timeout=15)
+                
+                # Si la MLB responde con 404 (Not Found), el dato simplemente no existe en su base.
+                # Rompemos el bucle para no quedarnos atrapados buscando algo fantasma.
+                if r.status_code == 404:
+                    return None
+                    
+                r.raise_for_status()
+                return r.json()
+                
+            except requests.exceptions.ConnectionError:
+                # ¡CAÍDA DE RED! El script se pausa aquí y espera 10 segundos.
+                print(f"\n[!] ⚠️ SIN INTERNET. Pausando el modelo... Reintentando en 10s. ({endpoint})")
+                time.sleep(10)
+                
+            except requests.exceptions.Timeout:
+                # El internet funciona, pero la API de MLB está muy lenta y no respondió a tiempo.
+                print(f"\n[!] ⚠️ TIMEOUT DE MLB. Servidor saturado. Reintentando en 10s... ({endpoint})")
+                time.sleep(10)
+                
+            except Exception as e: 
+                # Cualquier otro error extraño (ej. Error 500 de los servidores de MLB)
+                print(f"\n[!] ERROR DE CONEXIÓN API ({endpoint}): {e}")
+                return None
 
     def get_schedule(self, date_str):
         """Obtiene el calendario de juegos de la API de MLB para una fecha dada."""
@@ -380,27 +406,6 @@ class MLBDataLoader:
         except: pass
         return stats
 
-    def get_team_stats_split(self, team_id, opponent_hand, global_baseline=False):
-        """
-        Calcula el wOBA del equipo contra una mano específica o su promedio global.
-        Si global_baseline=True, ignora la mano y devuelve el talento general del equipo.
-        """
-        stats = {'woba': 0.315} # Promedio liga
-        try:
-            params = {'group': 'hitting', 'stats': 'season'}
-            if not global_baseline:
-                params['stats'] = 'vsOpponents'
-                params['sitCodes'] = "vsL" if opponent_hand == 'L' else "vsR"
-                
-            data = self._get(f"teams/{team_id}/stats", params)
-            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                s = data['stats'][0]['splits'][0]['stat']
-                obp = float(s.get('onBasePct', 0.315))
-                slg = float(s.get('slugging', 0.410))
-                # Normalización a wOBA
-                stats['woba'] = (1.7 * obp + slg) / 2.65
-        except: pass
-        return stats
     
     def get_team_pythagorean_data(self, team_id, date_str=None):
         try:
@@ -444,12 +449,10 @@ class MLBDataLoader:
         except: return {'l10': 0.5, 'streak': 0}
 
     def get_bullpen_fatigue(self, team_id, game_date):
-        # M3: Caché masivo para Boxscores (Aquí está el ahorro de tiempo)
         if len(self.boxscore_cache) > 500:
-            self.boxscore_cache.clear() # Liberamos RAM
-
-        if game_pk not in self.boxscore_cache:
-            self.boxscore_cache[game_pk] = self._get(f"game/{game_pk}/boxscore")
+            self.boxscore_cache.clear()
+        if len(self.schedule_cache) > 500:
+            self.schedule_cache.clear()
 
         fatigue_penalty = 0.0
         try:
@@ -464,7 +467,6 @@ class MLBDataLoader:
             for i in range(1, 4): 
                 prev_date = (date_obj - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                 
-                # M3: Caché para el calendario (evita redescargas)
                 sched_key = f"{prev_date}_{team_id}"
                 if sched_key not in self.schedule_cache:
                     self.schedule_cache[sched_key] = self._get("schedule", {'sportId': 1, 'date': prev_date, 'teamId': team_id, 'gameType': 'R'})
@@ -476,7 +478,6 @@ class MLBDataLoader:
                         if g['status']['abstractGameState'] == 'Final':
                             game_pk = g['gamePk']
                             
-                            # M3: Caché masivo para Boxscores (Aquí está el ahorro de tiempo)
                             if game_pk not in self.boxscore_cache:
                                 self.boxscore_cache[game_pk] = self._get(f"game/{game_pk}/boxscore")
                             
@@ -501,30 +502,26 @@ class MLBDataLoader:
                                         if i == 1: 
                                             pitcher_workload[p_id]['pitches_yesterday'] = pitches
 
-            # Calculamos exactamente cuantos brazos clave estan inhabilitados hoy
             unavailable_arms = 0
             for p_id, work in pitcher_workload.items():
-                # Regla de fatiga 1: Lanzo en dias consecutivos (2 o mas en los ultimos 3 dias)
                 if work['days_pitched'] >= 2:
                     unavailable_arms += 1
-                # Regla de fatiga 2: Carga extrema ayer (Mas de 25 pitcheos)
                 elif work['pitches_yesterday'] >= 25:
                     unavailable_arms += 1
                     
-            # Transformamos los brazos inhabilitados en una penalizacion de carreras para el modelo
             if unavailable_arms >= 4:
-                fatigue_penalty = 0.45  # Bullpen destruido, usaran novatos/posicion
+                fatigue_penalty = 0.45 
             elif unavailable_arms == 3:
-                fatigue_penalty = 0.30  # Uso severo, cerrador y preparador fuera
+                fatigue_penalty = 0.30 
             elif unavailable_arms == 2:
-                fatigue_penalty = 0.15  # Fatiga moderada alta
+                fatigue_penalty = 0.15 
             elif unavailable_arms == 1:
-                fatigue_penalty = 0.05  # Fatiga normal
+                fatigue_penalty = 0.05 
                 
             return fatigue_penalty
             
         except Exception as e: 
-            return 0.10 # Castigo generico conservador en caso de error de conexion
+            return 0.10
 
     def get_pitcher_hand(self, pid):
         if not pid: return 'R'

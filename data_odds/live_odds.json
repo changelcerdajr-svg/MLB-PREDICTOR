@@ -1,21 +1,21 @@
 {
-    "2026-03-29": [
+    "2026-03-31": [
         {
             "gameView": {
                 "homeTeam": {
                     "fullName": "Orioles"
                 },
                 "awayTeam": {
-                    "fullName": "Twins"
+                    "fullName": "Rangers"
                 }
             },
             "odds": {
                 "moneyline": [
                     {
-                        "sportsbook": "draftkings",
+                        "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -163,
-                            "awayOdds": 135
+                            "homeOdds": 105,
+                            "awayOdds": -126
                         }
                     }
                 ]
@@ -27,100 +27,16 @@
                     "fullName": "Phillies"
                 },
                 "awayTeam": {
-                    "fullName": "Rangers"
+                    "fullName": "Nationals"
                 }
             },
             "odds": {
                 "moneyline": [
                     {
-                        "sportsbook": "draftkings",
+                        "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -168,
-                            "awayOdds": 139
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "gameView": {
-                "homeTeam": {
-                    "fullName": "Braves"
-                },
-                "awayTeam": {
-                    "fullName": "Royals"
-                }
-            },
-            "odds": {
-                "moneyline": [
-                    {
-                        "sportsbook": "draftkings",
-                        "currentLine": {
-                            "homeOdds": -153,
-                            "awayOdds": 126
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "gameView": {
-                "homeTeam": {
-                    "fullName": "Blue Jays"
-                },
-                "awayTeam": {
-                    "fullName": "Athletics"
-                }
-            },
-            "odds": {
-                "moneyline": [
-                    {
-                        "sportsbook": "draftkings",
-                        "currentLine": {
-                            "homeOdds": -156,
-                            "awayOdds": 129
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "gameView": {
-                "homeTeam": {
-                    "fullName": "Marlins"
-                },
-                "awayTeam": {
-                    "fullName": "Rockies"
-                }
-            },
-            "odds": {
-                "moneyline": [
-                    {
-                        "sportsbook": "draftkings",
-                        "currentLine": {
-                            "homeOdds": -194,
-                            "awayOdds": 159
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "gameView": {
-                "homeTeam": {
-                    "fullName": "Mets"
-                },
-                "awayTeam": {
-                    "fullName": "Pirates"
-                }
-            },
-            "odds": {
-                "moneyline": [
-                    {
-                        "sportsbook": "draftkings",
-                        "currentLine": {
-                            "homeOdds": -186,
-                            "awayOdds": 153
+                            "homeOdds": -199,
+                            "awayOdds": 163
                         }
                     }
                 ]
@@ -132,16 +48,16 @@
                     "fullName": "Reds"
                 },
                 "awayTeam": {
-                    "fullName": "Red Sox"
+                    "fullName": "Pirates"
                 }
             },
             "odds": {
                 "moneyline": [
                     {
-                        "sportsbook": "draftkings",
+                        "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": 108,
-                            "awayOdds": -130
+                            "homeOdds": -101,
+                            "awayOdds": -118
                         }
                     }
                 ]
@@ -150,28 +66,7 @@
         {
             "gameView": {
                 "homeTeam": {
-                    "fullName": "Astros"
-                },
-                "awayTeam": {
-                    "fullName": "Angels"
-                }
-            },
-            "odds": {
-                "moneyline": [
-                    {
-                        "sportsbook": "draftkings",
-                        "currentLine": {
-                            "homeOdds": -181,
-                            "awayOdds": 149
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "gameView": {
-                "homeTeam": {
-                    "fullName": "Brewers"
+                    "fullName": "Marlins"
                 },
                 "awayTeam": {
                     "fullName": "White Sox"
@@ -180,10 +75,10 @@
             "odds": {
                 "moneyline": [
                     {
-                        "sportsbook": "draftkings",
+                        "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -168,
-                            "awayOdds": 139
+                            "homeOdds": -147,
+                            "awayOdds": 123
                         }
                     }
                 ]
@@ -192,19 +87,40 @@
         {
             "gameView": {
                 "homeTeam": {
-                    "fullName": "Cardinals"
+                    "fullName": "Blue Jays"
                 },
                 "awayTeam": {
-                    "fullName": "Rays"
+                    "fullName": "Rockies"
                 }
             },
             "odds": {
                 "moneyline": [
                     {
-                        "sportsbook": "draftkings",
+                        "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -102,
-                            "awayOdds": -118
+                            "homeOdds": -286,
+                            "awayOdds": 230
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Braves"
+                },
+                "awayTeam": {
+                    "fullName": "Athletics"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": -163,
+                            "awayOdds": 135
                         }
                     }
                 ]
@@ -216,16 +132,100 @@
                     "fullName": "Cubs"
                 },
                 "awayTeam": {
-                    "fullName": "Nationals"
+                    "fullName": "Angels"
                 }
             },
             "odds": {
                 "moneyline": [
                     {
-                        "sportsbook": "draftkings",
+                        "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -259,
-                            "awayOdds": 209
+                            "homeOdds": -143,
+                            "awayOdds": 119
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Brewers"
+                },
+                "awayTeam": {
+                    "fullName": "Rays"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": -131,
+                            "awayOdds": 110
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Cardinals"
+                },
+                "awayTeam": {
+                    "fullName": "Mets"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": 126,
+                            "awayOdds": -153
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Astros"
+                },
+                "awayTeam": {
+                    "fullName": "Red Sox"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": -149,
+                            "awayOdds": 123
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Padres"
+                },
+                "awayTeam": {
+                    "fullName": "Giants"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": 113,
+                            "awayOdds": -136
                         }
                     }
                 ]
@@ -237,16 +237,58 @@
                     "fullName": "Mariners"
                 },
                 "awayTeam": {
+                    "fullName": "Yankees"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": -109,
+                            "awayOdds": -109
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Diamondbacks"
+                },
+                "awayTeam": {
+                    "fullName": "Tigers"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": -115,
+                            "awayOdds": -105
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Dodgers"
+                },
+                "awayTeam": {
                     "fullName": "Guardians"
                 }
             },
             "odds": {
                 "moneyline": [
                     {
-                        "sportsbook": "draftkings",
+                        "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -143,
-                            "awayOdds": 119
+                            "homeOdds": -271,
+                            "awayOdds": 226
                         }
                     }
                 ]

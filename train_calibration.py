@@ -79,10 +79,13 @@ def train_isotonic_calibrator():
         current_date += timedelta(days=1)
 
     # --- RESULTADOS FINALES ---
+    # --- RESULTADOS FINALES ---
     print("\n" + "="*50)
     if len(X_raw) > 50:
-        roi = (units_won / bets_count) * 100
-        print(f"📊 RESULTADO FINAL AUDITORÍA V17.9")
+        # BUG 3 FIX: Prevención de ZeroDivisionError
+        roi = (units_won / bets_count) * 100 if bets_count > 0 else 0.0
+        
+        print(f"RESULTADO FINAL AUDITORÍA V17.9")
         print(f"Muestra evaluada: {bets_count} apuestas")
         print(f"Unidades Netas:   {units_won:+.2f} u")
         print(f"ROI Proyectado:   {roi:+.2f}%")

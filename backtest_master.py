@@ -79,7 +79,12 @@ def run_master_backtest(start_date_str, days=45):
         games = predictor.loader.get_schedule(date_str)
         
         for g in games:
+            # 1. Filtro de estatus básico
             if g['status'] != 'Final': continue
+            
+            # 🔴 BUG FIX: Evitar que juegos empatados/suspendidos cuenten como derrota
+            if g['real_winner'] is None: continue 
+            
             stats['total_games'] += 1
             if g['real_winner'] == g['home_name']: stats['baseline_home_wins'] += 1
                 

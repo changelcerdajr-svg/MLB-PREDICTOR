@@ -94,7 +94,14 @@ class MLBDataLoader:
                     if game_info['status'] == 'Final':
                         h_score = g['teams']['home'].get('score', 0)
                         a_score = g['teams']['away'].get('score', 0)
-                        game_info['real_winner'] = game_info['home_name'] if h_score > a_score else game_info['away_name']
+                        
+                        # MINOR FIX: Prevención de contaminación por empates
+                        if h_score > a_score:
+                            game_info['real_winner'] = game_info['home_name']
+                        elif a_score > h_score:
+                            game_info['real_winner'] = game_info['away_name']
+                        else:
+                            game_info['real_winner'] = None # Juego empatado/suspendido
 
                     games_list.append(game_info)
                 except Exception as e:
@@ -198,9 +205,11 @@ class MLBDataLoader:
             raw_xera = self.savant.get_pitcher_xera(player_id, year - 1)
             
         # Obtener IP (Innings Pitched) para shrinkage y el K9 real
+        # Obtener IP (Innings Pitched) para shrinkage y el K9 real
         ip_data = self._get(f"people/{player_id}/stats", {'stats': 'season', 'group': 'pitching'})
         current_ip = 0.0
         current_k9 = 7.5 # Promedio por defecto
+        current_bf = 0.0 # <--- ¡ESTA ES LA LÍNEA QUE FALTA AGREGAR!
         
         # --- FUNCIÓN DE SEGURIDAD PARA CONVERTIR TEXTO A DECIMAL ---
         def safe_float(val, default):
@@ -268,6 +277,12 @@ class MLBDataLoader:
                     prior_xwoba = self._get_prior_stats(pid, 'hitting')
                     
                     current_val = savant_xwoba if savant_xwoba is not None else prior_xwoba
+
+                    # BUG 1 FIX: Seguro contra novatos absolutos sin historial en Savant
+                    if current_val is None:
+                        current_val = LEAGUE_AVG_XWOBA
+                    if prior_xwoba is None:
+                        prior_xwoba = LEAGUE_AVG_XWOBA
 
                     # 4. Aplicar Shrinkage Bayesiano sobre PA
                     projected_xwoba = self._apply_bayesian_shrinkage(
@@ -429,9 +444,12 @@ class MLBDataLoader:
         except: return {'l10': 0.5, 'streak': 0}
 
     def get_bullpen_fatigue(self, team_id, game_date):
-        # M3: Inicializamos diccionarios de caché en la clase si no existen
-        if not hasattr(self, 'schedule_cache'): self.schedule_cache = {}
-        if not hasattr(self, 'boxscore_cache'): self.boxscore_cache = {}
+        # M3: Caché masivo para Boxscores (Aquí está el ahorro de tiempo)
+        if len(self.boxscore_cache) > 500:
+            self.boxscore_cache.clear() # Liberamos RAM
+
+        if game_pk not in self.boxscore_cache:
+            self.boxscore_cache[game_pk] = self._get(f"game/{game_pk}/boxscore")
 
         fatigue_penalty = 0.0
         try:

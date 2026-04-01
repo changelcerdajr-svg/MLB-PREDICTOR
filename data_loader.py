@@ -40,17 +40,17 @@ class MLBDataLoader:
         # Inicializamos el Scraper de Savant
         self.savant = StatcastScraper()
 
-    def _get(self, endpoint, params=None):
-        import time # Importamos la librería de tiempo para poder pausar
+    def _get(self, endpoint, params=None, timeout=15):
+        import time 
         url = f"{API_URL}/{endpoint}"
+        max_retries = 3
+        retries = 0
         
-        while True: # Bucle infinito: intentará hasta lograrlo
+        while retries < max_retries:
             try:
-                # AUMENTADO A 15 SEGUNDOS: Las peticiones históricas pesadas tardan más
-                r = self.session.get(url, params=params, timeout=15)
+                r = self.session.get(url, params=params, timeout=timeout)
                 
-                # Si la MLB responde con 404 (Not Found), el dato simplemente no existe en su base.
-                # Rompemos el bucle para no quedarnos atrapados buscando algo fantasma.
+                # Si la MLB responde con 404 (Not Found), el dato no existe.
                 if r.status_code == 404:
                     return None
                     
@@ -58,19 +58,21 @@ class MLBDataLoader:
                 return r.json()
                 
             except requests.exceptions.ConnectionError:
-                # ¡CAÍDA DE RED! El script se pausa aquí y espera 10 segundos.
                 print(f"\n[!] ⚠️ SIN INTERNET. Pausando el modelo... Reintentando en 10s. ({endpoint})")
                 time.sleep(10)
+                retries += 1
                 
             except requests.exceptions.Timeout:
-                # El internet funciona, pero la API de MLB está muy lenta y no respondió a tiempo.
                 print(f"\n[!] ⚠️ TIMEOUT DE MLB. Servidor saturado. Reintentando en 10s... ({endpoint})")
                 time.sleep(10)
+                retries += 1
                 
             except Exception as e: 
-                # Cualquier otro error extraño (ej. Error 500 de los servidores de MLB)
                 print(f"\n[!] ERROR DE CONEXIÓN API ({endpoint}): {e}")
                 return None
+                
+        print(f"\n[X] Límite de reintentos agotado para {endpoint}. Abortando.")
+        return None
 
     def get_schedule(self, date_str):
         """Obtiene el calendario de juegos de la API de MLB para una fecha dada."""

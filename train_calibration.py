@@ -6,6 +6,10 @@ from financial import get_fair_prob
 import pickle
 import json
 import os
+import datetime
+
+# Detectamos el año actual automáticamente para que el modelo nunca caduque
+current_year = datetime.date.today().year
 
 # --- FUNCIÓN DE APOYO PARA LEER TUS ODDS HISTÓRICOS ---
 def get_historical_odds(date_str, home_team_name):
@@ -30,8 +34,10 @@ def train_isotonic_calibrator():
     # CONFIGURACIÓN DE ENTRENAMIENTO OVERNIGHT (V17.9)
     # Cierre de temporada 2024 (2 meses de datos ultra-estables)
     # ---------------------------------------------------------
-    TRAIN_START = "2025-04-01"
-    TRAIN_END   = "2025-05-31"
+    # ANTES: TRAIN_START = "2025-04-01"
+# AHORA:
+    TRAIN_START = f"{current_year}-04-01"
+    TRAIN_END = f"{current_year}-10-01"
 
     print(f"🚀 INICIANDO AUDITORÍA Y CALIBRACIÓN: {TRAIN_START} al {TRAIN_END}")
     

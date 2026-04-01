@@ -117,7 +117,7 @@ class FeatureEngine:
         h_def_scalar = h_def / league_avg_runs
 
         h_lambda = (h_pow * a_def_scalar) * hfa
-        a_lambda = (a_pow * h_def_scalar) * (2.0 - hfa) 
+        a_lambda = (a_pow * h_def_scalar) * (1.0 / hfa)
 
         # --- MODELADO DE INCERTIDUMBRE GAUSSIANA V18.0 ---
         # A menos IP, mayor es la campana de Gauss (incertidumbre del talento).
@@ -141,17 +141,20 @@ class FeatureEngine:
             # Ajuste VMR para la Binomial Negativa
         avg_k9 = (h_k9 + a_k9) / 2.0
         k9_adj = 9.0 / max(1.0, avg_k9)
-        target_vmr = 1.8 * pf * max(0.92, min(1.08, k9_adj)) 
+        target_vmr = 1.8
         
-        def nbinom_sample(mu, vmr, size):
+        def nbinom_sample(mu, vmr):
             mu = np.maximum(mu, 0.001) 
             safe_vmr = max(1.05, vmr) 
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
-            return np.random.negative_binomial(r, p, size)
+            # --- FIX CRÍTICO #2 ---
+            # Numpy infiere el tamaño de la matriz automáticamente basándose en 'r' y 'p'.
+            # Eliminar el parámetro 'size' evita el colapso de 100 millones de muestras.
+            return np.random.negative_binomial(r, p)
 
-        h_scores = nbinom_sample(h_lambda_dist, target_vmr, rounds)
-        a_scores = nbinom_sample(a_lambda_dist, target_vmr, rounds)
+        h_scores = nbinom_sample(h_lambda_dist, target_vmr)
+        a_scores = nbinom_sample(a_lambda_dist, target_vmr)
         
         wins_array = (h_scores > a_scores).astype(float)
         ties_mask = (h_scores == a_scores)

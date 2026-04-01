@@ -20,6 +20,7 @@ def log_bet(fecha, juego, pick, confianza, prob_mercado, cuota, edge):
     df = pd.read_csv(FILE)
     
     # Evitar duplicados por fecha y juego
+    # Evitar duplicados por fecha y juego
     if not ((df['Fecha'] == fecha) & (df['Juego'] == juego)).any():
         new_data = pd.DataFrame([{
             "Fecha": fecha, 
@@ -28,7 +29,9 @@ def log_bet(fecha, juego, pick, confianza, prob_mercado, cuota, edge):
             "Confianza (%)": round(confianza, 1),
             "Prob Mercado": round(prob_mercado * 100, 1),
             "Cuota": cuota, 
-            "Edge": round(edge * 100, 2),
+            # --- FIX CRÍTICO #4 ---
+            # Guardamos el Edge con su valor real. Eliminamos la multiplicación (* 100)
+            "Edge": round(edge, 2),
             "Resultado": "Pendiente"
         }])
         df = pd.concat([df, new_data], ignore_index=True)

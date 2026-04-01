@@ -8,6 +8,9 @@ from bs4 import BeautifulSoup
 # Librerías del Tanque Selenium
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 # ELIMINAMOS webdriver_manager porque causó el archivo corrupto en Windows
 
 def parse_odds(text):
@@ -43,16 +46,17 @@ def scrape_live_mlb_odds_selenium():
     url = "https://www.vegasinsider.com/mlb/odds/las-vegas/"
     
     try:
-        print("🌐 Navegando a VegasInsider y cruzando la barrera de seguridad...")
+        print("🌐 Navegando a VegasInsider...")
         driver.get(url)
         
-        # EL TRUCO: Esperar pacientemente a que el JavaScript del casino procese los números
-        print("⏳ Esperando 8 segundos a que los momios se desencripten en pantalla...")
-        time.sleep(8) 
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-moneyline]"))
+        )
+        print("✅ Datos detectados en el DOM. Procediendo al parseo.")
         
         # Extraemos el HTML ya procesado y renderizado
         html = driver.page_source
-        driver.quit() # Cerramos el navegador fantasma para liberar RAM
+        driver.quit()
         
         soup = BeautifulSoup(html, 'html.parser')
         
@@ -109,10 +113,9 @@ def scrape_live_mlb_odds_selenium():
         
         return live_data
         
-    except Exception as e:
-        print(f"❌ Error durante la extracción estocástica: {e}")
-        try: driver.quit() 
-        except: pass
+    except Exception:
+        print("⚠️ Tiempo de espera agotado o página incompleta.")
+        driver.quit()
         return None
 
 if __name__ == "__main__":

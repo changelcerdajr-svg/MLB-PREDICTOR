@@ -34,7 +34,15 @@ class MLBDataLoader:
         # Declaramos los cachés aquí para que existan en todo el archivo
         self.boxscore_cache = {} 
         self.schedule_cache = {} 
-        
+        # Carga en memoria de la Capa 2 (Hot Hand)
+        self.hot_hand_data = {}
+        try:
+            import json
+            with open('data_odds/hot_hand.json', 'r') as f:
+                self.hot_hand_data = json.load(f)
+        except Exception as e:
+            pass # Si el archivo no existe o falla, el modelo opera normalmente con la Capa 1
+
         self._force_historical_mode = False
         
         # Inicializamos el Scraper de Savant
@@ -49,29 +57,23 @@ class MLBDataLoader:
         while retries < max_retries:
             try:
                 r = self.session.get(url, params=params, timeout=timeout)
-                
-                # Si la MLB responde con 404 (Not Found), el dato no existe.
                 if r.status_code == 404:
                     return None
-                    
                 r.raise_for_status()
                 return r.json()
-                
             except requests.exceptions.ConnectionError:
-                print(f"\n[!] ⚠️ SIN INTERNET. Pausando el modelo... Reintentando en 10s. ({endpoint})")
+                print(f"\n[!] ⚠️ SIN INTERNET. Reintentando en 10s... ({endpoint})")
                 time.sleep(10)
                 retries += 1
-                
             except requests.exceptions.Timeout:
-                print(f"\n[!] ⚠️ TIMEOUT DE MLB. Servidor saturado. Reintentando en 10s... ({endpoint})")
+                print(f"\n[!] ⚠️ TIMEOUT DE MLB. Reintentando en 10s... ({endpoint})")
                 time.sleep(10)
                 retries += 1
-                
             except Exception as e: 
-                print(f"\n[!] ERROR DE CONEXIÓN API ({endpoint}): {e}")
+                print(f"\n[!] ERROR API ({endpoint}): {e}")
                 return None
                 
-        print(f"\n[X] Límite de reintentos agotado para {endpoint}. Abortando.")
+        print(f"\n[X] Límite de 3 reintentos agotado para {endpoint}. Abortando.")
         return None
 
     def get_schedule(self, date_str):
@@ -147,9 +149,11 @@ class MLBDataLoader:
                     for team in division['teamRecords']:
                         runs = int(team.get('runsScored', 0))
                         wins = int(team.get('wins', 0))
-                        losses = int(team.get('losses', 0))
+                        
                         total_runs += runs
-                        total_games += (wins + losses)
+                        
+                        # FIX BUG #3: Solo sumamos 'wins' para no contar doble los partidos
+                        total_games += wins
             if total_games > 0:
                 league_avg = total_runs / total_games
                 if total_games < 200: 
@@ -272,14 +276,45 @@ class MLBDataLoader:
             
         # Retornamos IP para el simulador
         return {'xera': final_xera, 'k9': current_k9, 'ip': current_ip}
+
+    def _blend_hot_hand(self, base_xwoba, player_id, hot_hand_cache, weight=0.18):
+        """
+        Mezcla talento base (Capa 1) con sincronización reciente (Capa 2).
+        Nota: hot_hand_cache contiene xwOBAcon ( inherentemente más alto que xwOBA ).
+        El weight de 0.18 está calibrado para asimilar esta diferencia de escalas
+        sin inflar el baseline del jugador de forma destructiva.
+        """
+        recent = hot_hand_cache.get(str(player_id)) or hot_hand_cache.get(int(player_id))
+        if recent is None:
+            return base_xwoba  # Sin datos recientes: solo talento base
+        return (base_xwoba * (1.0 - weight)) + (recent * weight)
     
     def get_confirmed_lineup_xwoba(self, game_pk, team_type, vs_hand=None, team_id=None):
         try:
-            box = self._get(f"game/{game_pk}/boxscore")
-            if not box: return (None, False)
-            batters_ids = box['teams'][team_type].get('battingOrder', [])
-            if not batters_ids: return (None, False)
+            # 1. Buscamos el lineup en el endpoint de schedule (disponible pre-juego)
+            url = f"schedule?gamePk={game_pk}&hydrate=lineups"
+            data = self._get(url)
             
+            if not data or 'dates' not in data or not data['dates']:
+                return (None, False)
+                
+            game_data = data['dates'][0]['games'][0]
+            lineups = game_data.get('lineups', {})
+            
+            # 2. Separamos la búsqueda dependiendo de si somos local o visitante
+            if team_type == 'home':
+                players = lineups.get('homePlayers', [])
+            else:
+                players = lineups.get('awayPlayers', [])
+                
+            # 3. Extraemos la lista limpia de los IDs de los 9 bateadores
+            batters_ids = [player['id'] for player in players]
+            
+            # Si la MLB aún no publica el lineup, abortamos suavemente
+            if not batters_ids or len(batters_ids) < 9:
+                return (None, False)
+
+            # --- LÓGICA MATEMÁTICA ORIGINAL ---
             ids_str = ",".join([str(x) for x in batters_ids])
             people_data = self._get("people", {'personIds': ids_str, 'hydrate': 'stats(group=[hitting],type=[season])'})
             
@@ -294,30 +329,34 @@ class MLBDataLoader:
                         stat = s[0]['splits'][0]['stat']
                         current_pa = int(stat.get('plateAppearances', 0))
                     
-                    # 1. Obtenemos el xwOBA POR SPLIT REAL desde el nuevo scraper V18.0
+                    # Obtenemos el xwOBA POR SPLIT REAL desde el nuevo scraper V18.0
                     savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year, vs_hand=vs_hand)
                     
-                    # 2. Si es novato o tiene pocos turnos vs esa mano, usamos el global como respaldo
+                    # Si es novato o tiene pocos turnos vs esa mano, usamos el global como respaldo
                     if savant_xwoba is None:
                         savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
                     
-                    # 3. Prior histórico
+                    # Prior histórico
                     prior_xwoba = self._get_prior_stats(pid, 'hitting')
                     
                     current_val = savant_xwoba if savant_xwoba is not None else prior_xwoba
 
-                    # BUG 1 FIX: Seguro contra novatos absolutos sin historial en Savant
+                    # Seguro contra novatos absolutos sin historial
                     if current_val is None:
                         current_val = LEAGUE_AVG_XWOBA
                     if prior_xwoba is None:
                         prior_xwoba = LEAGUE_AVG_XWOBA
 
-                    # 4. Aplicar Shrinkage Bayesiano sobre PA
+                    # Aplicar Shrinkage Bayesiano sobre PA (CAPA 1: Talento Base)
                     projected_xwoba = self._apply_bayesian_shrinkage(
                         current_val, current_pa, K_BATTER_XWOBA, prior_xwoba
                     )
                     
-                    # Guardamos el valor directo y puro
+                    # --- INICIO INTEGRACIÓN CAPA 2 (HOT HAND) ---
+                    # Llamamos a la función modular usando el caché en memoria y la calibración del 18%
+                    projected_xwoba = self._blend_hot_hand(projected_xwoba, pid, self.hot_hand_data)
+                    # --- FIN INTEGRACIÓN CAPA 2 ---
+                    
                     xwoba_map[pid] = projected_xwoba
 
             weights = LINEUP_PA_VOLUME_MULTIPLIERS
@@ -327,7 +366,6 @@ class MLBDataLoader:
             for i, pid in enumerate(batters_ids):
                 if i < len(weights):
                     w = weights[i]
-                    # CORRECCIÓN: Eliminamos el platoon_multiplier que ya no existe
                     p_xwoba = xwoba_map.get(pid, LEAGUE_AVG_XWOBA)
                     weighted_sum += (p_xwoba * w)
                     total_weight += w

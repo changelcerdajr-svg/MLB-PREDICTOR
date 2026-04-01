@@ -28,7 +28,16 @@ def scrape_live_mlb_odds_selenium():
     
     # 1. Configurar opciones de Chrome para ser "Indetectable"
     options = Options()
-    options.add_argument("--headless=new") 
+    
+    # MODO FANTASMA ACTIVADO PARA SERVIDOR
+    options.add_argument("--headless=new")
+    
+    # ESCUDOS ANTI-BOT (Camuflaje para parecer un humano real)
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    # ESTABILIDAD Y VENTANA
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--no-sandbox")
@@ -49,8 +58,9 @@ def scrape_live_mlb_odds_selenium():
         print("🌐 Navegando a VegasInsider...")
         driver.get(url)
         
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-moneyline]"))
+        # Ahora el bot solo espera a que cargue la columna de los equipos
+        WebDriverWait(driver, 25).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "td.game-team"))
         )
         print("✅ Datos detectados en el DOM. Procediendo al parseo.")
         

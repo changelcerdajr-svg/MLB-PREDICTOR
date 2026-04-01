@@ -7,6 +7,9 @@ import pickle
 import json
 import os
 import datetime
+import datetime
+
+current_year = datetime.date.today().year
 
 # Detectamos el año actual automáticamente para que el modelo nunca caduque
 current_year = datetime.date.today().year
@@ -24,7 +27,7 @@ def get_historical_odds(date_str, home_team_name):
             if home_team_name.lower() in dk_home:
                 ml = g.get('odds', {}).get('moneyline', [])
                 for book in ml:
-                    if book['sportsbook'] == 'draftkings':
+                    if book['sportsbook'] in ['draftkings', 'vegas_consensus']:
                         return book['currentLine']['homeOdds'], book['currentLine']['awayOdds']
     except: pass
     return None, None
@@ -35,9 +38,11 @@ def train_isotonic_calibrator():
     # Cierre de temporada 2024 (2 meses de datos ultra-estables)
     # ---------------------------------------------------------
     # ANTES: TRAIN_START = "2025-04-01"
-# AHORA:
-    TRAIN_START = f"{current_year}-04-01"
-    TRAIN_END = f"{current_year}-10-01"
+
+
+# FIX BUG #7: Entrenamiento dinámico siempre usando la temporada completa del año ANTERIOR
+    TRAIN_START = f"{current_year - 1}-04-01"
+    TRAIN_END = f"{current_year - 1}-10-01"
 
     print(f"🚀 INICIANDO AUDITORÍA Y CALIBRACIÓN: {TRAIN_START} al {TRAIN_END}")
     
@@ -45,8 +50,8 @@ def train_isotonic_calibrator():
     X_raw, y_real = [], []
     units_won, bets_count = 0.0, 0
 
-    current_date = datetime.strptime(TRAIN_START, "%Y-%m-%d")
-    end_date = datetime.strptime(TRAIN_END, "%Y-%m-%d")
+    current_date = datetime.datetime.strptime(TRAIN_START, "%Y-%m-%d")
+    end_date = datetime.datetime.strptime(TRAIN_END, "%Y-%m-%d")
     
     while current_date <= end_date:
         date_str = current_date.strftime("%Y-%m-%d")

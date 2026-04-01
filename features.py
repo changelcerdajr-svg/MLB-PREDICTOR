@@ -141,7 +141,7 @@ class FeatureEngine:
             # Ajuste VMR para la Binomial Negativa
         avg_k9 = (h_k9 + a_k9) / 2.0
         k9_adj = 9.0 / max(1.0, avg_k9)
-        target_vmr = 1.8
+        target_vmr = 1.0 + (0.8 * k9_adj)
         
         def nbinom_sample(mu, vmr):
             mu = np.maximum(mu, 0.001) 

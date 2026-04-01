@@ -1,7 +1,7 @@
 import json
 import datetime
 from model import MLBPredictor
-from financial import american_to_prob, get_fair_prob, calculate_edge
+from financial import american_to_prob, get_fair_prob, calculate_edge, calculate_kelly
 import tracker # Importamos tu base de datos local
 
 LIVE_ODDS_PATH = 'data_odds/live_odds.json'
@@ -18,16 +18,6 @@ def load_live_odds():
         print("❌ Error: No se encontró live_odds.json. Corre 'python live_odds_scraper.py' primero.")
         return {}
 
-def american_to_decimal(american):
-    if american > 0: return (american / 100) + 1
-    return (100 / abs(american)) + 1
-
-def calculate_kelly(prob_win, american_odds):
-    b = american_to_decimal(american_odds) - 1
-    q = 1 - prob_win
-    f_star = (b * prob_win - q) / b
-    return max(0, f_star * KELLY_FRACTION)
-
 def get_today_odds(odds_data, date_str, mlb_home_name):
     day_games = odds_data.get(date_str, [])
     if not day_games: return None, None
@@ -38,7 +28,7 @@ def get_today_odds(odds_data, date_str, mlb_home_name):
         if mlb_clean in dk_name or dk_name in mlb_clean:
             ml_list = game.get('odds', {}).get('moneyline', [])
             for book in ml_list:
-                if book.get('sportsbook') == 'draftkings':
+                if book['sportsbook'] in ['draftkings', 'vegas_consensus']:
                     line = book.get('currentLine')
                     if line: return line.get('homeOdds'), line.get('awayOdds')
     return None, None
@@ -80,7 +70,7 @@ def generate_daily_picks():
         if prob < CONFIDENCE_THRESHOLD: continue
         if curr_odds < 0 and curr_odds < MAX_ODDS_LIMIT: continue
 
-        stake_pct = calculate_kelly(prob, curr_odds)
+        stake_pct = calculate_kelly(prob, curr_odds, fraction=KELLY_FRACTION)
         if stake_pct <= 0: continue 
         
         stake_amount = CURRENT_BANKROLL * stake_pct

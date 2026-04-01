@@ -128,10 +128,13 @@ class StatcastScraper:
         return self.pitchers_cache.get(year, {}).get(player_id)
 
 if __name__ == "__main__":
+    print("🔄 Iniciando descarga de métricas Statcast (xwOBA / xERA)...")
     scraper = StatcastScraper()
     # Sincronización inicial rápida
     for y in [2025, 2026]:
+        print(f"   -> Procesando año {y}...")
         scraper.fetch_batters(y)
         scraper.fetch_pitchers(y)
         # Pausa de cortesía para evitar rate-limiting
         time.sleep(2)
+    print("✅ ¡Actualización de Statcast completada con éxito!")

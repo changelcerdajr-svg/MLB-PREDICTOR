@@ -6,7 +6,7 @@ import datetime
 import textwrap
 from model import MLBPredictor
 # PUNTO 1 AUDITORÍA: Conexión obligatoria con el motor financiero
-from financial import get_fair_prob, calculate_edge, american_to_prob
+from financial import get_fair_prob, calculate_edge, american_to_prob, calculate_kelly
 
 # --- CONFIGURACIÓN ESTRATÉGICA ---
 DATASET_PATH = 'data_odds/mlb_odds_dataset.json'
@@ -30,12 +30,6 @@ def american_to_decimal(american):
 def calculate_payout_flat(odds, stake=1.0):
     if odds > 0: return stake * (odds / 100)
     return stake * (100 / abs(odds))
-
-def calculate_kelly_stake(prob_win, american_odds, current_fraction):
-    b = american_to_decimal(american_odds) - 1
-    q = 1 - prob_win
-    f_star = (b * prob_win - q) / b
-    return max(0, f_star * current_fraction)
 
 def get_real_odds(odds_data, date_str, mlb_home_name):
     day_games = odds_data.get(date_str, [])
@@ -86,6 +80,7 @@ def run_master_backtest(start_date_str, days=45):
             if g['real_winner'] is None: continue 
             
             stats['total_games'] += 1
+            
             if g['real_winner'] == g['home_name']: stats['baseline_home_wins'] += 1
                 
             h_odds, a_odds = get_real_odds(odds_data, date_str, g['home_name'])
@@ -154,7 +149,7 @@ def run_master_backtest(start_date_str, days=45):
                     current_fraction = KELLY_FRACTION * 0.75
             
             # Gestión de Capital Final
-            stake_pct = calculate_kelly_stake(prob, curr_odds, current_fraction)
+            stake_pct = calculate_kelly(prob, curr_odds, fraction=current_fraction)
             if stake_pct <= 0: continue
             
             stake_units = bankroll * stake_pct

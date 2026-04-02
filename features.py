@@ -98,7 +98,15 @@ class FeatureEngine:
 
     def calculate_defense_score(self, p_stats, bullpen_stats, fatigue, fielding_factor):
         # Lógica Statcast real
-        starter_xera = p_stats.get('xera', 4.00) if p_stats else 4.00
+        base_xera = p_stats.get('xera', 4.00) if p_stats else 4.00
+        babip = p_stats.get('babip', 0.300) if p_stats else 0.300
+        
+        # --- AJUSTE DE SUERTE (BABIP REGRESSION) ---
+        # Si el BABIP > 0.300 (tuvo mala suerte), restamos carreras a su xERA (mejorará)
+        # Si el BABIP < 0.300 (tuvo buena suerte), sumamos carreras a su xERA (empeorará)
+        luck_adjustment = (babip - 0.300) * 2.0 
+        starter_xera = base_xera - luck_adjustment
+        
         bullpen_era = bullpen_stats.get('fip', 4.10) if bullpen_stats else 4.10
         
         # BUG 2 FIX: Recalibración de pesos para evitar doble conteo del abridor

@@ -246,11 +246,11 @@ class MLBDataLoader:
             raw_xera = self.savant.get_pitcher_xera(player_id, year - 1)
             
         # Obtener IP (Innings Pitched) para shrinkage y el K9 real
-        # Obtener IP (Innings Pitched) para shrinkage y el K9 real
         ip_data = self._get(f"people/{player_id}/stats", {'stats': 'season', 'group': 'pitching'})
         current_ip = 0.0
         current_k9 = 7.5 # Promedio por defecto
-        current_bf = 0.0 # <--- ¡ESTA ES LA LÍNEA QUE FALTA AGREGAR!
+        current_bf = 0.0 
+        current_babip = 0.300 # <--- NUEVA VARIABLE DE SUERTE
         
         # --- FUNCIÓN DE SEGURIDAD PARA CONVERTIR TEXTO A DECIMAL ---
         def safe_float(val, default):
@@ -267,6 +267,8 @@ class MLBDataLoader:
                 current_k9 = safe_float(s.get('strikeoutsPer9Inn', 7.5), 7.5)
                 # M2: Extraemos los Bateadores Enfrentados (BF)
                 current_bf = safe_float(s.get('battersFaced', current_ip * 4.25), current_ip * 4.25)
+                # NUEVO: Extraemos el BABIP (Batting Average on Balls In Play)
+                current_babip = safe_float(s.get('babip', 0.300), 0.300)
                 
         # --- INICIO DE LA CORRECCIÓN CRÍTICA (Prior Bayesiano) ---
         prior_xera = self._get_prior_stats(player_id, 'pitching')
@@ -284,7 +286,7 @@ class MLBDataLoader:
             final_xera = safe_base
             
         # Retornamos IP para el simulador
-        return {'xera': final_xera, 'k9': current_k9, 'ip': current_ip}
+        return {'xera': final_xera, 'k9': current_k9, 'ip': current_ip, 'babip': current_babip}
 
     def _blend_hot_hand(self, base_xwoba, player_id, hot_hand_cache, weight=0.20):
         recent = hot_hand_cache.get(str(player_id)) or hot_hand_cache.get(int(player_id))
@@ -337,8 +339,11 @@ class MLBDataLoader:
                         stat = s[0]['splits'][0]['stat']
                         current_pa = int(stat.get('plateAppearances', 0))
                     
-                    # Obtenemos el xwOBA POR SPLIT REAL desde el nuevo scraper V18.0
                     savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year, vs_hand=vs_hand)
+
+                    # Si no hay muestra suficiente en el split, usamos el global como respaldo (Shrinkage)
+                    if savant_xwoba is None:
+                        savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
                     
                     # Si es novato o tiene pocos turnos vs esa mano, usamos el global como respaldo
                     if savant_xwoba is None:

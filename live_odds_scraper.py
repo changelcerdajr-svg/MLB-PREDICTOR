@@ -24,7 +24,7 @@ def parse_odds(text):
         return None
 
 def scrape_live_mlb_odds_selenium():
-    print("🚀 Iniciando Motor Selenium (Navegador Fantasma)...")
+    print(" Iniciando Motor Selenium (Navegador Fantasma)...")
     
     # 1. Configurar opciones de Chrome para ser "Indetectable"
     options = Options()
@@ -45,24 +45,24 @@ def scrape_live_mlb_odds_selenium():
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
     try:
-        print("⚙️ Iniciando Chrome (Modo Nativo Selenium 4+)...")
+        print(" Iniciando Chrome (Modo Nativo Selenium 4+)...")
         # Usamos la configuración por defecto. Selenium se encarga del driver silenciosamente.
         driver = webdriver.Chrome(options=options)
     except Exception as e:
-        print(f"❌ Error al iniciar Chrome: {e}")
+        print(f"Error al iniciar Chrome: {e}")
         return None
 
     url = "https://www.vegasinsider.com/mlb/odds/las-vegas/"
     
     try:
-        print("🌐 Navegando a VegasInsider...")
+        print(" Navegando a VegasInsider...")
         driver.get(url)
         
         # Ahora el bot solo espera a que cargue la columna de los equipos
         WebDriverWait(driver, 25).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "td.game-team"))
         )
-        print("✅ Datos detectados en el DOM. Procediendo al parseo.")
+        print("Datos detectados en el DOM. Procediendo al parseo.")
         
         # Extraemos el HTML ya procesado y renderizado
         html = driver.page_source
@@ -74,7 +74,7 @@ def scrape_live_mlb_odds_selenium():
         team_rows = [tr for tr in trs if tr.find('td', class_='game-team')]
         
         if not team_rows: 
-            print("❌ No se encontraron las tablas. Cloudflare nos bloqueó o la página no cargó.")
+            print("No se encontraron las tablas. Cloudflare nos bloqueó o la página no cargó.")
             return None
 
         live_data = []
@@ -124,7 +124,7 @@ def scrape_live_mlb_odds_selenium():
         return live_data
         
     except Exception:
-        print("⚠️ Tiempo de espera agotado o página incompleta.")
+        print("Tiempo de espera agotado o página incompleta.")
         driver.quit()
         return None
 
@@ -138,7 +138,7 @@ if __name__ == "__main__":
         # 1. Guardar el archivo temporal del día (Para la App en vivo)
         with open("data_odds/live_odds.json", "w", encoding="utf-8") as f:
             json.dump({today: data}, f, indent=4)
-        print(f"💰 ¡GOLPE AL CASINO! Éxito: {len(data)} juegos extraídos para hoy.")
+        print(f" ¡GOLPE AL CASINO! Éxito: {len(data)} juegos extraídos para hoy.")
         
         # 2. EL ACUMULADOR HISTÓRICO (Para la calibración a futuro)
         historical_path = "data_odds/mlb_odds_dataset.json"
@@ -150,7 +150,7 @@ if __name__ == "__main__":
                 with open(historical_path, "r", encoding="utf-8") as f:
                     historical_data = json.load(f)
             except Exception as e:
-                print(f"⚠️ Error al leer el historial anterior: {e}")
+                print(f" Error al leer el historial anterior: {e}")
                 
         # Inyectamos o actualizamos los momios de hoy en el gran diccionario
         historical_data[today] = data
@@ -159,7 +159,7 @@ if __name__ == "__main__":
         with open(historical_path, "w", encoding="utf-8") as f:
             json.dump(historical_data, f, indent=4)
             
-        print(f"📚 Base de datos histórica actualizada exitosamente con los momios del {today}.")
+        print(f" Base de datos histórica actualizada exitosamente con los momios del {today}.")
         
     else:
-        print("⚠️ Selenium terminó, pero no encontró momios.")
+        print(" Selenium terminó, pero no encontró momios.")

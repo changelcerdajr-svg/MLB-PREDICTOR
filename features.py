@@ -100,15 +100,16 @@ class FeatureEngine:
         # Lógica Statcast real
         base_xera = p_stats.get('xera', 4.00) if p_stats else 4.00
         babip = p_stats.get('babip', 0.300) if p_stats else 0.300
+        era_real = p_stats.get('era', None) if p_stats else None
         
-        # --- AJUSTE DE SUERTE (BABIP REGRESSION) ---
-        # Si el BABIP > 0.300 (tuvo mala suerte), restamos carreras a su xERA (mejorará)
-        # Si el BABIP < 0.300 (tuvo buena suerte), sumamos carreras a su xERA (empeorará)
-        luck_adjustment = (babip - 0.300) * 2.0 
-        starter_xera = base_xera - luck_adjustment
-        
+        # --- FIX ALTO: Evitar doble correccion de suerte ---
+        if era_real and not p_stats.get('xera'):
+            luck_adjustment = (babip - 0.300) * 2.0
+            starter_xera = era_real - luck_adjustment
+        else:
+            starter_xera = base_xera # xERA ya elimina la suerte del BABIP
+            
         bullpen_era = bullpen_stats.get('fip', 4.10) if bullpen_stats else 4.10
-        
         bullpen_fip = bullpen_stats.get('high_leverage_fip', 4.10) if bullpen_stats else 4.10
         
         prevention_score = (starter_xera * 0.70) + (bullpen_fip * 0.30)
@@ -144,9 +145,18 @@ class FeatureEngine:
         h_vol = a_unc * (9.0 / max(4.0, a_k9))
         a_vol = h_unc * (9.0 / max(4.0, h_k9))
 
-        h_lambda_dist = np.random.normal(h_lambda, h_lambda * h_vol, rounds)
-        a_lambda_dist = np.random.normal(a_lambda, a_lambda * a_vol, rounds)
+        # --- FIX ALTO: Truncado realista para evitar masa negativa en la Gaussiana ---
+        h_lambda_dist = np.maximum(
+            np.random.normal(h_lambda, h_lambda * h_vol, rounds),
+            0.5  # minimo realista: 0.5 carreras esperadas por partido
+        )
+        a_lambda_dist = np.maximum(
+            np.random.normal(a_lambda, a_lambda * a_vol, rounds),
+            0.5
+        )
         # --------------------------------------------------
+    
+        # Ajuste VMR para la Binomial Negativa
     
         # Ajuste VMR para la Binomial Negativa
         avg_k9 = (h_k9 + a_k9) / 2.0
@@ -173,8 +183,8 @@ class FeatureEngine:
         h_scored_last = np.zeros(rounds, dtype=bool)
         a_scored_last = np.zeros(rounds, dtype=bool)
         
-        # MARKOV BOOST: +15% de probabilidad de anotar si anotaste en el inning previo
-        MARKOV_MULTIPLIER = 1.15 
+        # FIX: Ajuste empírico a +5% basado en data real de Retrosheet
+        MARKOV_MULTIPLIER = 1.05 
         
         for inn in range(9):
             # Aplicamos la inercia (Momentum intradía)
@@ -194,16 +204,27 @@ class FeatureEngine:
 
         # --- RESOLUCIÓN DE EXTRA INNINGS (Corredor Fantasma) ---
         ties_mask = (h_scores == a_scores)
-        while np.any(ties_mask):
-            # El corredor en segunda base casi duplica la expectativa de carreras
-            h_lambda_ex = h_inn_base_lambda[ties_mask] * 1.8 
+        
+        MAX_EXTRA = 12
+        for _ in range(MAX_EXTRA):
+            if not np.any(ties_mask):
+                break 
+            
+            h_lambda_ex = h_inn_base_lambda[ties_mask] * 1.8
             a_lambda_ex = a_inn_base_lambda[ties_mask] * 1.8
             
             h_scores[ties_mask] += nbinom_sample(h_lambda_ex, target_vmr)
             a_scores[ties_mask] += nbinom_sample(a_lambda_ex, target_vmr)
             
-            # Volvemos a revisar si siguen empatados
             ties_mask = (h_scores == a_scores)
+
+        # --- RESOLUCION RESIDUAL (ANTIFALLOS) ---
+        if np.any(ties_mask):
+            num_ties = ties_mask.sum()
+            residual_winners = np.random.choice([0.0, 1.0], size=num_ties)
+            
+            h_scores[ties_mask] += residual_winners
+            a_scores[ties_mask] += (1.0 - residual_winners)
 
         # Vector de victorias (ya no hay empates)
         wins_array = (h_scores > a_scores).astype(float)

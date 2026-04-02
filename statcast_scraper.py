@@ -79,7 +79,10 @@ class StatcastScraper:
     def fetch_pitchers(self, year, force=False):
         """Descarga xERA con buscador dinámico de métricas."""
         file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
-        if not force and year < 2026 and os.path.exists(file_path):
+    
+        # FIX: Usar la variable dinámica para proteger el caché histórico
+        if not force and year < CURRENT_SEASON and os.path.exists(file_path):
+            print(f"[CACHE] Datos de pitchers {year} cargados desde disco.")
             return True
 
         url = f"{self.base_url}?type=pitcher&year={year}&position=&team=&min=1&csv=true"

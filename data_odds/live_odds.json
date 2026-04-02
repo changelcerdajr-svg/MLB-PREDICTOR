@@ -1,5 +1,5 @@
 {
-    "2026-04-01": [
+    "2026-04-02": [
         {
             "gameView": {
                 "homeTeam": {
@@ -14,7 +14,7 @@
                     {
                         "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -226,
+                            "homeOdds": -232,
                             "awayOdds": 183
                         }
                     }
@@ -77,7 +77,7 @@
                     {
                         "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -280,
+                            "homeOdds": -281,
                             "awayOdds": 229
                         }
                     }
@@ -98,8 +98,8 @@
                     {
                         "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -306,
-                            "awayOdds": 238
+                            "homeOdds": -280,
+                            "awayOdds": 224
                         }
                     }
                 ]
@@ -119,8 +119,8 @@
                     {
                         "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -156,
-                            "awayOdds": 129
+                            "homeOdds": -149,
+                            "awayOdds": 123
                         }
                     }
                 ]
@@ -161,8 +161,8 @@
                     {
                         "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -144,
-                            "awayOdds": 118
+                            "homeOdds": -143,
+                            "awayOdds": 119
                         }
                     }
                 ]
@@ -203,7 +203,7 @@
                     {
                         "sportsbook": "vegas_consensus",
                         "currentLine": {
-                            "homeOdds": -165,
+                            "homeOdds": -163,
                             "awayOdds": 139
                         }
                     }
@@ -234,27 +234,6 @@
         {
             "gameView": {
                 "homeTeam": {
-                    "fullName": "Padres"
-                },
-                "awayTeam": {
-                    "fullName": "Giants"
-                }
-            },
-            "odds": {
-                "moneyline": [
-                    {
-                        "sportsbook": "vegas_consensus",
-                        "currentLine": {
-                            "homeOdds": -155,
-                            "awayOdds": 129
-                        }
-                    }
-                ]
-            }
-        },
-        {
-            "gameView": {
-                "homeTeam": {
                     "fullName": "Mariners"
                 },
                 "awayTeam": {
@@ -268,6 +247,48 @@
                         "currentLine": {
                             "homeOdds": -117,
                             "awayOdds": -102
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Padres"
+                },
+                "awayTeam": {
+                    "fullName": "Giants"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": -153,
+                            "awayOdds": 129
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "gameView": {
+                "homeTeam": {
+                    "fullName": "Royals"
+                },
+                "awayTeam": {
+                    "fullName": "Twins"
+                }
+            },
+            "odds": {
+                "moneyline": [
+                    {
+                        "sportsbook": "vegas_consensus",
+                        "currentLine": {
+                            "homeOdds": 100,
+                            "awayOdds": -120
                         }
                     }
                 ]

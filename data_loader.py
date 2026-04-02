@@ -28,24 +28,37 @@ class MLBDataLoader:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': USER_AGENT})
+        
+        import datetime
+        self.current_season_year = datetime.datetime.now().year 
+        
         self.standings_cache = {} 
         self.player_history_cache = {} 
-        
-        # Declaramos los cachés aquí para que existan en todo el archivo
         self.boxscore_cache = {} 
         self.schedule_cache = {} 
+        
         # Carga en memoria de la Capa 2 (Hot Hand)
         self.hot_hand_data = {}
         try:
             import json
             with open('data_odds/hot_hand.json', 'r') as f:
                 self.hot_hand_data = json.load(f)
-        except Exception as e:
-            pass # Si el archivo no existe o falla, el modelo opera normalmente con la Capa 1
+        except Exception:
+            pass 
+
+        # --- NUEVO: PRIORS INTELIGENTES (Proyecciones de Pretemporada) ---
+        self.projections_data = {}
+        try:
+            import json
+            # El modelo buscara este archivo en tu carpeta. Si no esta, 
+            # no se rompe, simplemente usa el promedio de liga como antes.
+            with open('data_statcast/projections_base.json', 'r') as f:
+                self.projections_data = json.load(f)
+        except Exception:
+            pass
+        # -----------------------------------------------------------------
 
         self._force_historical_mode = False
-        
-        # Inicializamos el Scraper de Savant
         self.savant = StatcastScraper()
 
     def reload_hot_hand(self):
@@ -183,27 +196,36 @@ class MLBDataLoader:
             return self.player_history_cache[cache_key]
         
         prev_year = self.current_season_year - 1
+        res = None
         
-        # 1. Intentamos primero con los datos de Baseball Savant
+        # 1. Intentamos primero con los datos de Baseball Savant del ano pasado
         if stat_group == 'hitting':
             res = self.savant.get_batter_xwoba(pid, prev_year)
         else:
             res = self.savant.get_pitcher_xera(pid, prev_year)
 
-        # 2. PUNTO 4 AUDITORÍA: Fallback técnico si Savant no tiene datos
+        # --- FIX ESTRUCTURAL: INYECCION DE PRIORS INTELIGENTES ---
+        # Si el jugador NO tiene historial en Savant (novato, lesionado todo el ano anterior),
+        # buscamos su proyeccion matematica antes de condenarlo al promedio de la liga.
+        if res is None and self.projections_data:
+            proj = self.projections_data.get(str(pid))
+            if proj:
+                res = proj.get('xwoba') if stat_group == 'hitting' else proj.get('xera')
+                if res is not None:
+                    self.player_history_cache[cache_key] = res
+                    return res
+        # ---------------------------------------------------------
+
+        # 2. Fallback tecnico tradicional si tampoco hay proyecciones
         if res is None:
             try:
-                # Realizamos la petición a la API de MLB para obtener estadísticas tradicionales
                 data = self._get(f"people/{pid}/stats", {'stats': 'season', 'group': stat_group, 'season': prev_year})
                 
                 if data and 'stats' in data and data['stats'][0].get('splits'):
-                    # Definimos 'stat' extrayendo el primer split de la temporada anterior
                     stat = data['stats'][0]['splits'][0]['stat']
                     
                     if stat_group == 'hitting':
-                        # --- INICIO CORRECCIÓN A4: Cálculo wOBA real ---
                         pa = float(stat.get('plateAppearances', 0))
-                        
                         if pa > 0:
                             bb = float(stat.get('baseOnBalls', 0))
                             ibb = float(stat.get('intentionalWalks', 0))
@@ -213,26 +235,21 @@ class MLBDataLoader:
                             triples = float(stat.get('triples', 0))
                             hr = float(stat.get('homeRuns', 0))
                             
-                            ubb = bb - ibb # Bases por bolas no intencionales
+                            ubb = bb - ibb 
                             singles = hits - doubles - triples - hr
                             
-                            # Pesos wOBA modernos (Aprox. temporada 2024)
                             woba_num = (0.69 * ubb) + (0.72 * hbp) + (0.88 * singles) + (1.25 * doubles) + (1.59 * triples) + (2.05 * hr)
                             woba_den = pa - ibb
                             
                             raw_woba = woba_num / woba_den if woba_den > 0 else LEAGUE_AVG_XWOBA
                             res = raw_woba * RAW_WOBA_REGRESSOR
                         else:
-                            # Fallback extremo si no hay turnos al bate
                             obp = float(stat.get('onBasePct', 0.320))
                             slg = float(stat.get('slugging', 0.400))
                             res = ((1.7 * obp + slg) / 2.65) * RAW_WOBA_REGRESSOR
-                        # --- FIN CORRECCIÓN A4 ---
-                        
             except:
                 res = LEAGUE_AVG_XWOBA if stat_group == 'hitting' else LEAGUE_AVG_XERA
         
-        # Guardamos en caché y retornamos inmediatamente
         self.player_history_cache[cache_key] = res
         return res
     
@@ -403,31 +420,128 @@ class MLBDataLoader:
         return res
     
     def get_team_discipline(self, team_id):
-        # Proxy para la vulnerabilidad ofensiva frente a arsenales de alto poder (K%)
+        STABILIZATION_PA = 1140.0 
+        
         try:
-            data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting'})
-            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                s = data['stats'][0]['splits'][0]['stat']
-                pa = float(s.get('plateAppearances', 1))
-                so = float(s.get('strikeouts', 0))
-                if pa > 0:
-                    return so / pa
-        except: pass
-        return 0.22 # Promedio histórico de la liga (22% de ponches)
+            # 1. Datos 2026 (Fijate en el sportId: 1)
+            data_cur = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting', 'season': self.current_season_year, 'sportId': 1})
+            pa_cur, so_cur = 0.0, 0.0
+            
+            if data_cur and 'stats' in data_cur and data_cur['stats'] and data_cur['stats'][0].get('splits'):
+                s_cur = data_cur['stats'][0]['splits'][0]['stat']
+                pa_cur = float(s_cur.get('plateAppearances', 0))
+                so_cur = float(s_cur.get('strikeouts', 0))
+                
+            if so_cur == 0:
+                pa_cur = 0.0 
+                
+            if pa_cur >= STABILIZATION_PA:
+                return so_cur / pa_cur if pa_cur > 0 else 0.22
+                
+            # 2. Carryover 2025 (Fijate en el sportId: 1)
+            data_prev = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting', 'season': self.current_season_year - 1, 'sportId': 1})
+            pa_prev, so_prev = 0.0, 0.0
+            
+            if data_prev and 'stats' in data_prev and data_prev['stats'] and data_prev['stats'][0].get('splits'):
+                s_prev = data_prev['stats'][0]['splits'][0]['stat']
+                pa_prev = float(s_prev.get('plateAppearances', 1))
+                so_prev = float(s_prev.get('strikeouts', 0))
+                
+            k_rate_prev = so_prev / pa_prev if pa_prev > 0 else 0.22
+            
+            # --- CANDADO DE SEGURIDAD ABSOLUTA ---
+            # Un equipo de MLB JAMAS tiene un K% menor a 12% ni mayor a 35%. 
+            if k_rate_prev < 0.12 or k_rate_prev > 0.35: 
+                k_rate_prev = 0.22
+                
+            k_rate_cur = so_cur / pa_cur if pa_cur > 0 else k_rate_prev
+            
+            # 3. Mezcla Proporcional
+            weight_cur = min(1.0, pa_cur / STABILIZATION_PA)
+            final_k = (k_rate_cur * weight_cur) + (k_rate_prev * (1.0 - weight_cur))
+            
+            return final_k
+            
+        except Exception: 
+            return 0.22 
     
     def get_batted_ball_profile(self, entity_id, is_pitcher=False):
-        # Devuelve el ratio GO/AO (Ground Outs to Air Outs)
+        STABILIZATION_VOL = 120.0 if is_pitcher else 1140.0
+        
         try:
             group = 'pitching' if is_pitcher else 'hitting'
             endpoint = f"people/{entity_id}/stats" if is_pitcher else f"teams/{entity_id}/stats"
-            data = self._get(endpoint, {'stats': 'season', 'group': group})
-            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                s = data['stats'][0]['splits'][0]['stat']
-                go_ao = float(s.get('groundOutsToAirOuts', 1.0))
-                return go_ao
-        except: 
-            pass
-        return 1.0 # Promedio neutral de la liga
+            
+            data_cur = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year, 'sportId': 1})
+            vol_cur, goao_cur = 0.0, 0.0
+            
+            if data_cur and 'stats' in data_cur and data_cur['stats'] and data_cur['stats'][0].get('splits'):
+                s_cur = data_cur['stats'][0]['splits'][0]['stat']
+                vol_cur = float(s_cur.get('battersFaced', s_cur.get('plateAppearances', 0)))
+                goao_cur = float(s_cur.get('groundOutsToAirOuts', 1.0))
+                
+            if vol_cur >= STABILIZATION_VOL and goao_cur > 0:
+                return goao_cur
+                
+            # Carryover 2025
+            data_prev = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year - 1, 'sportId': 1})
+            goao_prev = 1.0
+            
+            if data_prev and 'stats' in data_prev and data_prev['stats'] and data_prev['stats'][0].get('splits'):
+                s_prev = data_prev['stats'][0]['splits'][0]['stat']
+                goao_prev = float(s_prev.get('groundOutsToAirOuts', 1.0))
+                
+            # --- CANDADO DE SEGURIDAD ABSOLUTA ---
+            if goao_prev <= 0: goao_prev = 1.0
+            if goao_cur <= 0: goao_cur = goao_prev
+                
+            final_goao = goao_cur if vol_cur > 0 else goao_prev
+            
+            if vol_cur > 0:
+                weight_cur = min(1.0, vol_cur / STABILIZATION_VOL)
+                final_goao = (goao_cur * weight_cur) + (goao_prev * (1.0 - weight_cur))
+                
+            return final_goao
+            
+        except Exception: 
+            return 1.0
+    
+    def get_batted_ball_profile(self, entity_id, is_pitcher=False):
+        # Estabilizacion: 30 juegos de equipo (1140 PA) o ~30 IP para pitchers (120 BF)
+        STABILIZATION_VOL = 120.0 if is_pitcher else 1140.0
+        
+        try:
+            group = 'pitching' if is_pitcher else 'hitting'
+            endpoint = f"people/{entity_id}/stats" if is_pitcher else f"teams/{entity_id}/stats"
+            
+            data_cur = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year})
+            vol_cur, goao_cur = 0.0, 0.0
+            
+            if data_cur and 'stats' in data_cur and data_cur['stats'] and data_cur['stats'][0].get('splits'):
+                s_cur = data_cur['stats'][0]['splits'][0]['stat']
+                vol_cur = float(s_cur.get('battersFaced', s_cur.get('plateAppearances', 0)))
+                goao_cur = float(s_cur.get('groundOutsToAirOuts', 1.0))
+                
+            if vol_cur >= STABILIZATION_VOL:
+                return goao_cur
+                
+            # Carryover 2025
+            data_prev = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year - 1})
+            goao_prev = 1.0
+            
+            if data_prev and 'stats' in data_prev and data_prev['stats'] and data_prev['stats'][0].get('splits'):
+                s_prev = data_prev['stats'][0]['splits'][0]['stat']
+                goao_prev = float(s_prev.get('groundOutsToAirOuts', 1.0))
+                
+            final_goao = goao_cur if vol_cur > 0 else goao_prev
+            if vol_cur > 0:
+                weight_cur = vol_cur / STABILIZATION_VOL
+                final_goao = (goao_cur * weight_cur) + (goao_prev * (1.0 - weight_cur))
+                
+            return final_goao
+            
+        except Exception as e: 
+            return 1.0
 
     def get_bullpen_stats(self, team_id):
         # Estadísticas base por si la API falla

@@ -9,6 +9,9 @@ USER_AGENT = "Mozilla/5.0 (MLB-Predictor-Pro/12.3)"
 SIMULATION_ROUNDS = 10000     # Optimizado para convergencia estadística
 STRESS_TEST_ROUNDS = 2000     # Para el cálculo de Sensibilidad (Stress Testing)
 
+CONFIDENCE_THRESHOLD = 0.55
+MAX_ODDS_LIMIT = -250
+
 # 3. FACTORES DE PARQUE (Park Factors - Base Carreras Totales)
 # > 1.00 = Favorece Ofensiva | < 1.00 = Favorece Pitcheo
 PARK_FACTORS = {

@@ -48,6 +48,15 @@ class MLBDataLoader:
         # Inicializamos el Scraper de Savant
         self.savant = StatcastScraper()
 
+    def reload_hot_hand(self):
+            """Actualiza el caché en memoria para la simulación de ventana móvil."""
+            import json
+            try:
+                with open('data_odds/hot_hand.json', 'r') as f:
+                    self.hot_hand_data = json.load(f)
+            except Exception:
+                self.hot_hand_data = {}
+
     def _get(self, endpoint, params=None, timeout=15):
         import time 
         url = f"{API_URL}/{endpoint}"
@@ -277,19 +286,18 @@ class MLBDataLoader:
         # Retornamos IP para el simulador
         return {'xera': final_xera, 'k9': current_k9, 'ip': current_ip}
 
-    def _blend_hot_hand(self, base_xwoba, player_id, hot_hand_cache, weight=0.18):
-        """
-        Mezcla talento base (Capa 1) con sincronización reciente (Capa 2).
-        Nota: hot_hand_cache contiene xwOBAcon ( inherentemente más alto que xwOBA ).
-        El weight de 0.18 está calibrado para asimilar esta diferencia de escalas
-        sin inflar el baseline del jugador de forma destructiva.
-        """
+    def _blend_hot_hand(self, base_xwoba, player_id, hot_hand_cache, weight=0.20):
         recent = hot_hand_cache.get(str(player_id)) or hot_hand_cache.get(int(player_id))
         if recent is None:
-            return base_xwoba  # Sin datos recientes: solo talento base
-        return (base_xwoba * (1.0 - weight)) + (recent * weight)
+            return base_xwoba  
+            
+        # Normalización matemática: escalamos el xwOBAcon al entorno del xwOBA general
+        normalized_recent = recent * (LEAGUE_AVG_XWOBA / 0.380)
+        
+        # Al estar normalizado, podemos usar un peso ligeramente más agresivo (20%)
+        return (base_xwoba * (1.0 - weight)) + (normalized_recent * weight)
     
-    def get_confirmed_lineup_xwoba(self, game_pk, team_type, vs_hand=None, team_id=None):
+    def get_confirmed_lineup_xwoba(self, game_pk, team_type, vs_hand=None, team_id=None, use_hot_hand=True):
         try:
             # 1. Buscamos el lineup en el endpoint de schedule (disponible pre-juego)
             url = f"schedule?gamePk={game_pk}&hydrate=lineups"
@@ -354,8 +362,8 @@ class MLBDataLoader:
                     
                     # --- INICIO INTEGRACIÓN CAPA 2 (HOT HAND) ---
                     # Llamamos a la función modular usando el caché en memoria y la calibración del 18%
-                    projected_xwoba = self._blend_hot_hand(projected_xwoba, pid, self.hot_hand_data)
-                    # --- FIN INTEGRACIÓN CAPA 2 ---
+                    if use_hot_hand:
+                        projected_xwoba = self._blend_hot_hand(projected_xwoba, pid, self.hot_hand_data)
                     
                     xwoba_map[pid] = projected_xwoba
 

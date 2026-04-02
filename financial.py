@@ -7,19 +7,54 @@ def american_to_prob(odds: int) -> float:
         return 100.0 / (odds + 100.0)
     else:
         return abs(odds) / (abs(odds) + 100.0)
+    
+def calculate_kelly(prob_win, american_odds, fraction=0.25):
+    """
+    Calcula el tamaño de la apuesta usando el Criterio de Kelly fraccionado (V18.0).
+    fraction: 0.25 para 1/4 Kelly (Gestión de riesgo institucional).
+    """
+    # 0. Validación de seguridad contra momios rotos (cero)
+    if not american_odds or american_odds == 0:
+        return 0.0
+        
+    # 1. Calcular el pago neto 'b' (decimal odds - 1)
+    if american_odds > 0:
+        b = american_odds / 100.0
+    else:
+        b = 100.0 / abs(american_odds)
+    
+    # 2. Probabilidad de pérdida
+    q = 1.0 - prob_win
+    
+    # 3. Fórmula de Kelly: f* = (bp - q) / b
+    f_star = (b * prob_win - q) / b
+    
+    # 4. Aplicar fracción y proteger contra valores negativos (sin apuesta)
+    return max(0.0, f_star * fraction)
 
 def get_fair_prob(h_odds: int, a_odds: int):
     """
     Limpia la comisión (vig) del casino usando el Método de Shin.
     Retorna la probabilidad real (Fair Value) del local y visitante.
     """
+    # 1. Validación de seguridad contra momios nulos o corruptos
+    if not h_odds or not a_odds or h_odds == 0 or a_odds == 0:
+        return 0.5, 0.5  # Retorna moneda al aire si los datos están rotos
+
     pi_h = american_to_prob(h_odds)
     pi_a = american_to_prob(a_odds)
-    margin = pi_h + pi_a - 1.0
+    
+    total_implied = pi_h + pi_a
+    
+    # 2. Protección contra División por Cero
+    if total_implied == 0:
+        return 0.5, 0.5
+        
+    margin = total_implied - 1.0
 
     # Si por alguna razón no hay vig (raro), devolvemos las probabilidades normalizadas
     if margin <= 0:
-        return pi_h / (pi_h + pi_a), pi_a / (pi_h + pi_a)
+        return pi_h / total_implied, pi_a / total_implied
 
     # Función objetivo para el método de Shin
     def shin_objective(z, p1, p2):
@@ -34,14 +69,13 @@ def get_fair_prob(h_odds: int, a_odds: int):
         def calc_fair(pi, z_val, total_pi):
             return ( (z_val**2 + 4*(1-z_val)*(pi**2 / total_pi))**0.5 - z_val ) / (2*(1-z_val))
             
-        fair_h = calc_fair(pi_h, z, pi_h + pi_a)
-        fair_a = calc_fair(pi_a, z, pi_h + pi_a)
+        fair_h = calc_fair(pi_h, z, total_implied)
+        fair_a = calc_fair(pi_a, z, total_implied)
         
         return fair_h, fair_a
     except:
         # Fallback de seguridad: Normalización proporcional clásica
-        total = pi_h + pi_a
-        return pi_h / total, pi_a / total
+        return pi_h / total_implied, pi_a / total_implied
 
 def calculate_edge(model_prob: float, market_prob_clean: float) -> dict:
     """

@@ -16,16 +16,21 @@ MIN_EVENTS = 10
 OUTPUT_FILE = 'data_odds/hot_hand.json'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-def update_hot_hand_database():
-    print(f"Iniciando volcado de métricas biomecánicas (Últimos {DAYS_BACK} días)...")
-    
-    # AJUSTE DE PRUEBA: Una ventana de solo 3 días para evitar el Time Out
-    current_year = 2025
-    start_date = datetime.date(2025, 9, 20)
-    end_date = datetime.date(2025, 9, 23)
+def update_hot_hand_database(target_date_str=None):
+    # Si recibimos una fecha, operamos en Modo Backtest (Viaje en el tiempo)
+    if target_date_str:
+        end_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    # Si no, operamos en Modo Producción (Hoy)
+    else:
+        end_date = datetime.date.today() + datetime.timedelta(days=1)
+        
+    start_date = end_date - datetime.timedelta(days=DAYS_BACK + 1)
+    current_year = end_date.year
     
     start_str = start_date.strftime('%Y-%m-%d')
     end_str = end_date.strftime('%Y-%m-%d')
+    
+    print(f"   -> Extrayendo ventana móvil: {start_str} al {end_str}")
     
     # FIX: Año hardcodeado dinamizado (hfSea={current_year})
     url = (

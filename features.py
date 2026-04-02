@@ -3,6 +3,7 @@
 
 import numpy as np
 import math
+from scipy.stats import nbinom  # <-- NUEVA IMPORTACIÓN
 from config import PARK_FACTORS
 
 # Base empírica de orientaciones (Grados desde el Norte geográfico hacia el CF)
@@ -138,7 +139,7 @@ class FeatureEngine:
         a_lambda_dist = np.random.normal(a_lambda, a_lambda * a_vol, rounds)
         # --------------------------------------------------
     
-            # Ajuste VMR para la Binomial Negativa
+        # Ajuste VMR para la Binomial Negativa
         avg_k9 = (h_k9 + a_k9) / 2.0
         k9_adj = 9.0 / max(1.0, avg_k9)
         target_vmr = 1.0 + (0.8 * k9_adj)
@@ -148,10 +149,8 @@ class FeatureEngine:
             safe_vmr = max(1.05, vmr) 
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
-            # --- FIX CRÍTICO #2 ---
-            # Numpy infiere el tamaño de la matriz automáticamente basándose en 'r' y 'p'.
-            # Eliminar el parámetro 'size' evita el colapso de 100 millones de muestras.
-            return np.random.negative_binomial(r, p)
+            # --- FIX ALTO: SciPy nbinom.rvs acepta arrays float para 'r' ---
+            return nbinom.rvs(r, p)
 
         h_scores = nbinom_sample(h_lambda_dist, target_vmr)
         a_scores = nbinom_sample(a_lambda_dist, target_vmr)

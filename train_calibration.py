@@ -6,13 +6,9 @@ from financial import get_fair_prob
 import pickle
 import json
 import os
-import datetime
-import datetime
 
-current_year = datetime.date.today().year
 
-# Detectamos el año actual automáticamente para que el modelo nunca caduque
-current_year = datetime.date.today().year
+current_year = datetime.now().year
 
 # --- FUNCIÓN DE APOYO PARA LEER TUS ODDS HISTÓRICOS ---
 def get_historical_odds(date_str, home_team_name):

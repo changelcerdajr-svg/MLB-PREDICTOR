@@ -7,10 +7,11 @@ import textwrap
 from model import MLBPredictor
 # PUNTO 1 AUDITORÍA: Conexión obligatoria con el motor financiero
 from financial import get_fair_prob, calculate_edge, american_to_prob, calculate_kelly
+from hot_hand_updater import update_hot_hand_database
 
 # --- CONFIGURACIÓN ESTRATÉGICA ---
 DATASET_PATH = 'data_odds/mlb_odds_dataset.json'
-CONFIDENCE_THRESHOLD = 0.55  # Umbral de confianza del modelo
+CONFIDENCE_THRESHOLD = 0.51  # Umbral de confianza del modelo
 MAX_ODDS_LIMIT = -250        # Protección contra favoritos extremos
 KELLY_FRACTION = 0.25        # Gestión de riesgo (1/4 Kelly)
 STARTING_BANKROLL = 1000.0   # Capital inicial de simulación
@@ -45,9 +46,9 @@ def get_real_odds(odds_data, date_str, mlb_home_name):
                     if line: return line.get('homeOdds'), line.get('awayOdds')
     return None, None
 
-def run_master_backtest(start_date_str, days=45):
+def run_master_backtest(start_date_str, days=45, use_hot_hand=True):
     # use_calibrator=False para medir el Alpha puro del motor
-    predictor = MLBPredictor(use_calibrator=False) 
+    predictor = MLBPredictor(use_calibrator=False)
     odds_data = load_odds_data()
     start_dt = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
     
@@ -70,6 +71,17 @@ def run_master_backtest(start_date_str, days=45):
     
     for i in range(days):
         date_str = (start_dt + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+        
+        # --- NUEVO: MOTOR DE VENTANA MÓVIL ---
+        if use_hot_hand:
+            print(f"\n[!] Actualizando Capa 2 para el día: {date_str}")
+            # 1. Descarga los 10 días previos a la fecha actual del ciclo
+            success = update_hot_hand_database(target_date_str=date_str)
+            # 2. Refresca la memoria del modelo
+            if success:
+                predictor.loader.reload_hot_hand()
+        # ------------------------------------
+
         games = predictor.loader.get_schedule(date_str)
         
         for g in games:
@@ -108,9 +120,9 @@ def run_master_backtest(start_date_str, days=45):
             if curr_odds < 0 and curr_odds < MAX_ODDS_LIMIT: continue
             
             # BLOQUEO CRÍTICO: Si no hay ventaja sobre el valor justo, no hay apuesta
-            if real_edge <= 0:
-                continue 
-            # -----------------------------------------------------------------------
+            # Restaurado a <= 0 para que coincida exactamente con run_daily_picks.py
+            if real_edge <= 0: 
+                continue
 
             # --- CONTROL FINANCIERO V18.0 ---
             
@@ -199,7 +211,14 @@ def run_master_backtest(start_date_str, days=45):
         print("El modelo no encontró valor real tras eliminar la comisión del casino.")
     print("=" * 70)
 
-if __name__ == "__main__":
-    # Backtest ciego (Out-of-sample): 90 días de la temporada 2025
-    # Evalúa el rendimiento en el entorno más volátil (Abril-Junio)
-    run_master_backtest("2025-04-01", days=90)
+    # --- NUEVO BLOQUE: RETORNO DE DATOS PARA EL COMPARADOR ---
+    if stats['bets'] > 0:
+        return {
+            'bets': stats['bets'],
+            'won': stats['won'],
+            'win_rate': (stats['won'] / stats['bets']) * 100,
+            'roi': (stats['flat_profit'] / stats['bets']) * 100,
+            'avg_edge': (stats['total_real_edge'] / stats['bets']) * 100,
+            'final_bankroll': bankroll
+        }
+    return None

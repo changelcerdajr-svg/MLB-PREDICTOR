@@ -1,10 +1,15 @@
 # statcast_scraper.py - V17.9 (Resiliencia Industrial y Gestión de Datos)
 
-import pandas as pd
-import requests
-import io
 import os
+import io
 import time
+import json
+import requests
+import datetime
+import pandas as pd
+
+# Variable dinámica para que el caché funcione automáticamente cada año
+CURRENT_SEASON = datetime.datetime.now().year
 
 class StatcastScraper:
     def __init__(self):
@@ -31,7 +36,7 @@ class StatcastScraper:
         file_path = os.path.join(self.data_dir, file_name)
 
         # No descargar de nuevo si el año ya pasó y el archivo existe
-        if not force and year < 2026 and os.path.exists(file_path):
+        if not force and year < CURRENT_SEASON and os.path.exists(file_path):
             return True
 
         # --- CIRUGÍA DE DATOS V18.0: CAMBIO DE ENDPOINT ---

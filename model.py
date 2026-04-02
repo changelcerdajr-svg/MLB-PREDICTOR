@@ -1,15 +1,16 @@
 # model.py
 # Orquestador V17.9 (Motor Statcast Total + Volatilidad K/9)
-from config import SIMULATION_ROUNDS, STRESS_TEST_ROUNDS
+from config import SIMULATION_ROUNDS, STRESS_TEST_ROUNDS, get_hfa_factor # <-- Todos juntos aquí
 import pickle
 import os
 from data_loader import MLBDataLoader
 from features import FeatureEngine
 
 class MLBPredictor:
-    def __init__(self, use_calibrator=True):
+    def __init__(self, use_calibrator=True, use_hot_hand=True):
         self.loader = MLBDataLoader()
         self.engine = FeatureEngine()
+        self.use_hot_hand = use_hot_hand # Guardamos la preferencia
         
         self.calibrator = None
         if use_calibrator:
@@ -23,7 +24,8 @@ class MLBPredictor:
 
     def predict_game(self, game):
         # 1. Preparación de Entorno
-        schedule_df = self.loader.get_travel_schedule_window(game['date'], days_back=2)
+        # Cambiamos days_back=2 por days_back=5 para capturar viajes largos y días libres
+        schedule_df = self.loader.get_travel_schedule_window(game['date'], days_back=5)
         league_avg_runs = self.loader.get_league_run_environment(game['date'])
         
         # 2. Pitcheo con xERA y Mano del Lanzador
@@ -43,9 +45,20 @@ class MLBPredictor:
         a_bullpen = self.loader.get_bullpen_stats(game['away_id'])
 
         # 3. Lineups con xwOBA Real (Platoon Proxy V17.9)
-        h_xwoba, h_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'home', vs_hand=a_hand, team_id=game['home_id'])
-        a_xwoba, a_confirmed = self.loader.get_confirmed_lineup_xwoba(game['id'], 'away', vs_hand=h_hand, team_id=game['away_id'])
+        h_xwoba, h_confirmed = self.loader.get_confirmed_lineup_xwoba(
+            game['id'], 'home', vs_hand=a_hand, team_id=game['home_id'], 
+            use_hot_hand=self.use_hot_hand 
+        )
+        
+        a_xwoba, a_confirmed = self.loader.get_confirmed_lineup_xwoba(
+            game['id'], 'away', vs_hand=h_hand, team_id=game['away_id'],
+            use_hot_hand=self.use_hot_hand 
+        )
 
+        if not h_confirmed or not a_confirmed:
+            return {'error': 'Lineups no confirmados. Operación bloqueada.'}
+        
+        
         if not h_confirmed or not a_confirmed:
             return {'error': 'Lineups no confirmados. Operación bloqueada.'}
 
@@ -80,31 +93,28 @@ class MLBPredictor:
         # El equipo visitante batea contra el pitcher local en el mismo parque
         a_xwoba_adj *= calculate_trajectory_multiplier(h_pitcher_goao, a_team_goao, pf)
 
-        # 6. Arsenal Advantage
-        h_discipline_k_rate = self.loader.get_team_discipline(game['home_id'])
-        a_discipline_k_rate = self.loader.get_team_discipline(game['away_id'])
+        # 6. Arsenal Advantage (K9 del Pitcher vs K% del Equipo)
+        def calculate_arsenal_advantage(k9, discipline):
+            # K9 promedio es ~9.0. Disciplina (K%) promedio es ~0.22.
+            pitcher_k_factor = k9 / 9.0
+            team_k_factor = discipline / 0.22
+            impact = (pitcher_k_factor * team_k_factor) - 1.0
+            # Retorna un modificador suave (máximo +/- 5%)
+            return 1.0 - max(-0.05, min(0.05, impact * 0.05))
 
-        def calculate_arsenal_advantage(pitcher_k9, batter_k_rate):
-            k9_diff = (pitcher_k9 - 8.5) / 8.5
-            k_rate_diff = (batter_k_rate - 0.22) / 0.22
-            
-            # Sumamos las ventajas direccionales
-            pitcher_edge = k9_diff + k_rate_diff
-            
-            # Coeficiente ajustado de 0.15 a 0.08 para evitar saturar el clamp
-            multiplier = 1.0 - (pitcher_edge * 0.08)
-            
-            return max(0.90, min(1.10, multiplier))
-        
-        h_xwoba_adj *= calculate_arsenal_advantage(a_pstats['k9'], h_discipline_k_rate)
-        a_xwoba_adj *= calculate_arsenal_advantage(h_pstats['k9'], a_discipline_k_rate)
+        h_disc = self.loader.get_team_discipline(game['home_id'])
+        a_disc = self.loader.get_team_discipline(game['away_id'])
 
-        # 7. Momentum
+        h_xwoba_adj *= calculate_arsenal_advantage(a_k9, h_disc)
+        a_xwoba_adj *= calculate_arsenal_advantage(h_k9, a_disc)
+
+        # 7. Momentum (Neutralizado por Marco Teórico V19.0)
         h_mom = self.loader.get_team_momentum(game['home_id'], game['date'])
         a_mom = self.loader.get_team_momentum(game['away_id'], game['date'])
         
-        h_streak_mult = 1.0 + max(-0.03, min(0.03, h_mom['streak'] * 0.005))
-        a_streak_mult = 1.0 + max(-0.03, min(0.03, a_mom['streak'] * 0.005))
+        # Fijamos en 1.0 para que no distorsione las variables de Power ni Defense
+        h_streak_mult = 1.0 
+        a_streak_mult = 1.0
 
         # 8. Defensa y Fatiga (El clima y PF ya se calcularon en el 5a)
         h_fatigue = self.loader.get_bullpen_fatigue(game['home_id'], game['date'])

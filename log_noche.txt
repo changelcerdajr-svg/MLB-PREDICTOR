@@ -1,0 +1,21 @@
+[2026-04-01 23:02:53] ERROR en python live_odds_scraper.py: Traceback (most recent call last):
+  File "C:\Users\chang\Downloads\MLB\mlb-predictor\live_odds_scraper.py", line 133, in <module>
+    data = scrape_live_mlb_odds_selenium()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\chang\Downloads\MLB\mlb-predictor\live_odds_scraper.py", line 27, in scrape_live_mlb_odds_selenium
+    print("\U0001f680 Iniciando Motor Selenium (Navegador Fantasma)...")
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f680' in position 0: character maps to <undefined>
+
+[2026-04-01 23:03:02] ERROR en python oos_validation.py: Traceback (most recent call last):
+  File "C:\Users\chang\Downloads\MLB\mlb-predictor\oos_validation.py", line 57, in <module>
+    run_oos_acid_test()
+  File "C:\Users\chang\Downloads\MLB\mlb-predictor\oos_validation.py", line 8, in run_oos_acid_test
+    print("\U0001f9ea PRUEBA DEL ÁCIDO: VALIDACIÓN OUT-OF-SAMPLE (OOS)")
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f9ea' in position 0: character maps to <undefined>
+

@@ -1,7 +1,8 @@
 # train_calibration.py - V17.9 (Full Audit - Overnight Edition)
 from model import MLBPredictor
 from datetime import datetime, timedelta
-from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
+import numpy as np
 from financial import get_fair_prob
 import pickle
 import json
@@ -108,13 +109,24 @@ def train_isotonic_calibrator():
         print(f"Unidades Netas:   {units_won:+.2f} u")
         print(f"ROI Proyectado:   {roi:+.2f}%") 
         
-        iso_reg = IsotonicRegression(out_of_bounds='clip').fit(X_raw, y_real)
-        with open('isotonic_calibrator.pkl', 'wb') as f:
-            pickle.dump(iso_reg, f)
-        print("✅ Calibrador 'isotonic_calibrator.pkl' guardado con éxito.")
-    else:
-        print("❌ Muestra insuficiente para calibrar (Menos de 50 juegos con Edge).")
-    print("="*50 + "\n")
+        # --- FIX MEDIO: PLATT SCALING (REGULARIZACIÓN L2) ---
+        X_reshaped = np.array(X_raw).reshape(-1, 1)
+        
+        # Regresión Logística con penalización C=1.0 para evitar overfitting
+        lr = LogisticRegression(C=1.0, penalty='l2', solver='lbfgs')
+        lr.fit(X_reshaped, y_real)
+        
+        # Creamos una clase Wrapper para que model.py siga funcionando igual
+        class RegularizedCalibrator:
+            def __init__(self, model):
+                self.model = model
+            def predict(self, X):
+                X_arr = np.array(X).reshape(-1, 1)
+                # Retornamos la probabilidad calibrada de victoria
+                return self.model.predict_proba(X_arr)[:, 1]
 
-if __name__ == "__main__":
-    train_isotonic_calibrator()
+        calibrator = RegularizedCalibrator(lr)
+        
+        with open('isotonic_calibrator.pkl', 'wb') as f:
+            pickle.dump(calibrator, f)
+        print("✅ Calibrador Suavizado (Platt Scaling) guardado con éxito.")

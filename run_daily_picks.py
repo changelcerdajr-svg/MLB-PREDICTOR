@@ -7,7 +7,7 @@ import tracker # Importamos tu base de datos local
 from hot_hand_updater import update_hot_hand_database # <-- Integración V19.0
 
 LIVE_ODDS_PATH = 'data_odds/live_odds.json'
-CONFIDENCE_THRESHOLD = 0.51 # Ajustado al estándar de la V19.0
+CONFIDENCE_THRESHOLD = 0.55001 # Ajustado al estándar de la V19.0
 MAX_ODDS_LIMIT = -250       
 KELLY_FRACTION = 0.25       
 CURRENT_BANKROLL = 1000.0   

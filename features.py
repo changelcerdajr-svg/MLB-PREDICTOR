@@ -209,11 +209,3 @@ class FeatureEngine:
         wins_array = (h_scores > a_scores).astype(float)
         
         return float(np.mean(wins_array)), float(np.mean(h_scores)), float(np.mean(a_scores)), float(np.var(wins_array))
-        h_scores = nbinom_sample(h_lambda_dist, target_vmr)
-        a_scores = nbinom_sample(a_lambda_dist, target_vmr)
-        
-        wins_array = (h_scores > a_scores).astype(float)
-        ties_mask = (h_scores == a_scores)
-        wins_array[ties_mask] = 0.5 
-        
-        return float(np.mean(wins_array)), float(np.mean(h_scores)), float(np.mean(a_scores)), float(np.var(wins_array))

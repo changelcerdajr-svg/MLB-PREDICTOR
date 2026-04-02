@@ -109,8 +109,9 @@ class FeatureEngine:
         
         bullpen_era = bullpen_stats.get('fip', 4.10) if bullpen_stats else 4.10
         
-        # BUG 2 FIX: Recalibración de pesos para evitar doble conteo del abridor
-        prevention_score = (starter_xera * 0.75) + (bullpen_era * 0.25)
+        bullpen_fip = bullpen_stats.get('high_leverage_fip', 4.10) if bullpen_stats else 4.10
+        
+        prevention_score = (starter_xera * 0.70) + (bullpen_fip * 0.30)
         
         if isinstance(fielding_factor, dict):
             ff_value = fielding_factor.get('fielding', 0.985)
@@ -160,6 +161,54 @@ class FeatureEngine:
             # --- FIX ALTO: SciPy nbinom.rvs acepta arrays float para 'r' ---
             return nbinom.rvs(r, p)
 
+        # --- NUEVO: MOTOR DE MARKOV INNING POR INNING (V19.1) ---
+        # Dividimos la expectativa total entre 9 entradas
+        h_inn_base_lambda = h_lambda_dist / 9.0
+        a_inn_base_lambda = a_lambda_dist / 9.0
+        
+        h_scores = np.zeros(rounds)
+        a_scores = np.zeros(rounds)
+        
+        # Memoria del modelo de Markov (¿Anotó en el inning anterior?)
+        h_scored_last = np.zeros(rounds, dtype=bool)
+        a_scored_last = np.zeros(rounds, dtype=bool)
+        
+        # MARKOV BOOST: +15% de probabilidad de anotar si anotaste en el inning previo
+        MARKOV_MULTIPLIER = 1.15 
+        
+        for inn in range(9):
+            # Aplicamos la inercia (Momentum intradía)
+            h_lambda_cur = np.where(h_scored_last, h_inn_base_lambda * MARKOV_MULTIPLIER, h_inn_base_lambda)
+            a_lambda_cur = np.where(a_scored_last, a_inn_base_lambda * MARKOV_MULTIPLIER, a_inn_base_lambda)
+            
+            # Simulamos las carreras de este inning específico
+            h_inn_runs = nbinom_sample(h_lambda_cur, target_vmr)
+            a_inn_runs = nbinom_sample(a_lambda_cur, target_vmr)
+            
+            h_scores += h_inn_runs
+            a_scores += a_inn_runs
+            
+            # Actualizamos la memoria para el siguiente inning
+            h_scored_last = h_inn_runs > 0
+            a_scored_last = a_inn_runs > 0
+
+        # --- RESOLUCIÓN DE EXTRA INNINGS (Corredor Fantasma) ---
+        ties_mask = (h_scores == a_scores)
+        while np.any(ties_mask):
+            # El corredor en segunda base casi duplica la expectativa de carreras
+            h_lambda_ex = h_inn_base_lambda[ties_mask] * 1.8 
+            a_lambda_ex = a_inn_base_lambda[ties_mask] * 1.8
+            
+            h_scores[ties_mask] += nbinom_sample(h_lambda_ex, target_vmr)
+            a_scores[ties_mask] += nbinom_sample(a_lambda_ex, target_vmr)
+            
+            # Volvemos a revisar si siguen empatados
+            ties_mask = (h_scores == a_scores)
+
+        # Vector de victorias (ya no hay empates)
+        wins_array = (h_scores > a_scores).astype(float)
+        
+        return float(np.mean(wins_array)), float(np.mean(h_scores)), float(np.mean(a_scores)), float(np.var(wins_array))
         h_scores = nbinom_sample(h_lambda_dist, target_vmr)
         a_scores = nbinom_sample(a_lambda_dist, target_vmr)
         

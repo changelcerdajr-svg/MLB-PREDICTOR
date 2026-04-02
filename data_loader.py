@@ -430,33 +430,69 @@ class MLBDataLoader:
         return 1.0 # Promedio neutral de la liga
 
     def get_bullpen_stats(self, team_id):
-        stats = {'era': 4.00, 'whip': 1.30, 'fip': 4.10}
+        # Estadísticas base por si la API falla
+        stats = {'era': 4.00, 'whip': 1.30, 'fip': 4.10, 'high_leverage_fip': 4.00}
+        
         try:
-            data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'pitching'})
-            if data and 'stats' in data and data['stats'] and data['stats'][0].get('splits'):
-                s = data['stats'][0]['splits'][0]['stat']
-                ip = float(s.get('inningsPitched', 0.0))
-                era = float(s.get('era', 4.00))
+            # Consultamos el Roster Activo hidratado con las estadísticas de la temporada actual
+            url = f"teams/{team_id}/roster"
+            params = {'hydrate': 'person(stats(type=[season],group=[pitching]))'}
+            data = self._get(url, params=params)
+            
+            if data and 'roster' in data:
+                relievers = []
                 
-                # --- NUEVO: Cálculo de FIP (Proxy de xERA) para el Bullpen ---
-                if ip > 10:
-                    hr = int(s.get('homeRuns', 0))
-                    bb = int(s.get('baseOnBalls', 0))
-                    k = int(s.get('strikeouts', 0))
-                    # Fórmula FIP = ((13*HR) + (3*BB) - (2*K)) / IP + constante (aprox 3.20)
-                    fip = ((13 * hr) + (3 * bb) - (2 * k)) / ip + 3.20
-                else:
-                    fip = era # Fallback si hay muy pocos innings
-                # -------------------------------------------------------------
+                for player in data['roster']:
+                    # Filtramos: Solo pitchers activos
+                    if player['position']['abbreviation'] == 'P' and player['status']['code'] == 'A':
+                        person = player['person']
+                        if 'stats' in person and person['stats'] and person['stats'][0].get('splits'):
+                            s = person['stats'][0]['splits'][0]['stat']
+                            
+                            games_started = int(s.get('gamesStarted', 0))
+                            games_played = int(s.get('gamesPlayed', 0))
+                            
+                            # Identificamos si es relevista (ha relevado más veces de las que ha abierto)
+                            if games_played > games_started:
+                                ip = float(s.get('inningsPitched', 0.0))
+                                era = float(s.get('era', 4.00))
+                                hr = int(s.get('homeRuns', 0))
+                                bb = int(s.get('baseOnBalls', 0))
+                                k = int(s.get('strikeouts', 0))
+                                saves = int(s.get('saves', 0))
+                                
+                                # Cálculo de FIP individual
+                                fip = ((13 * hr) + (3 * bb) - (2 * k)) / max(1.0, ip) + 3.20 if ip > 0 else 4.10
+                                
+                                relievers.append({
+                                    'ip': ip, 'fip': fip, 'era': era, 'saves': saves
+                                })
+                
+                if relievers:
+                    # 1. Bullpen Global Ponderado por Innings Lanzados
+                    total_ip = sum(r['ip'] for r in relievers)
+                    if total_ip > 0:
+                        weighted_fip = sum(r['fip'] * (r['ip'] / total_ip) for r in relievers)
+                        weighted_era = sum(r['era'] * (r['ip'] / total_ip) for r in relievers)
+                    else:
+                        weighted_fip, weighted_era = 4.10, 4.00
 
-                if ip < 20:
-                    w = ip / 30.0 
-                    era = (era * w) + (4.00 * (1-w))
-                    fip = (fip * w) + (4.10 * (1-w))
+                    # 2. High Leverage Bullpen (Los 3 relevistas con más salvamentos/IP - 8vo y 9no inning)
+                    relievers.sort(key=lambda x: (x['saves'], x['ip']), reverse=True)
+                    top_3 = relievers[:3]
+                    top3_ip = sum(r['ip'] for r in top_3)
                     
-                stats['era'] = era
-                stats['fip'] = fip
-        except: pass
+                    if top3_ip > 0:
+                        high_lev_fip = sum(r['fip'] * (r['ip'] / top3_ip) for r in top_3)
+                    else:
+                        high_lev_fip = weighted_fip
+
+                    stats['fip'] = weighted_fip
+                    stats['era'] = weighted_era
+                    stats['high_leverage_fip'] = high_lev_fip
+        except Exception as e:
+            print(f"Error procesando High-Leverage Bullpen: {e}")
+            
         return stats
 
     

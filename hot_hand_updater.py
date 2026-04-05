@@ -81,7 +81,10 @@ def update_hot_hand_database(target_date_str=None):
         
         valid_hot_hands = grouped[grouped['events_count'] >= MIN_EVENTS]
         
-        hot_hand_dict = {}
+        # FIX MEDIO 10: Inyectar el promedio de liga dinámico en el JSON
+        league_avg_xwobacon = round(float(df_clean['xwoba_event'].mean()), 4)
+        hot_hand_dict = {'__league_avg__': league_avg_xwobacon}
+
         for _, row in valid_hot_hands.iterrows():
             player_id = int(row['batter'])
             hot_hand_dict[player_id] = round(row['recent_xwobacon'], 4)

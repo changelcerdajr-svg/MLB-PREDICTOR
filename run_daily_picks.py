@@ -3,13 +3,11 @@ import json
 import datetime
 from model import MLBPredictor
 from financial import american_to_prob, get_fair_prob, calculate_edge, calculate_kelly
-import tracker # Importamos tu base de datos local
-from hot_hand_updater import update_hot_hand_database # <-- Integración V19.0
-from config import CONFIDENCE_THRESHOLD, MAX_ODDS_LIMIT
+import tracker 
+from hot_hand_updater import update_hot_hand_database 
+from config import CONFIDENCE_THRESHOLD, MAX_ODDS_LIMIT, KELLY_FRACTION, MAX_SENSITIVITY
 
-LIVE_ODDS_PATH = 'data_odds/live_odds.json'
-MAX_ODDS_LIMIT = -250       
-KELLY_FRACTION = 0.25       
+LIVE_ODDS_PATH = 'data_odds/live_odds.json'    
 CURRENT_BANKROLL = 1000.0   
 
 def load_live_odds():
@@ -36,77 +34,84 @@ def get_today_odds(odds_data, date_str, mlb_home_name):
     return None, None
 
 def generate_daily_picks():
-    print("Iniciando Terminal de Operaciones V19.0 (Scraping + Hot Hand)...")
-    
-    # 1. ACTUALIZACIÓN AUTOMÁTICA CAPA 2 (CRÍTICO PARA V19.0)
-    print("\n[1] Actualizando Sincronización Biomecánica (Últimos 10 días)...")
-    success = update_hot_hand_database()
-    if not success:
-        print("Advertencia: No se pudo actualizar el Hot Hand. Usando talento base (Capa 1).")
-        
-    print("\n[2] Inicializando Motor de Monte Carlo...")
-    predictor = MLBPredictor(use_calibrator=True, use_hot_hand=True)
-    odds_data = load_live_odds()
-    
+    print("Iniciando MLB Predictor - Buscando Picks de Valor...")
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     
-    print(f"Buscando juegos programados para hoy: {today_str}")
+    odds_data = load_live_odds()
+    if not odds_data:
+        return
+        
+    predictor = MLBPredictor()
     games = predictor.loader.get_schedule(today_str)
     
     if not games:
-        print("No hay juegos programados en la MLB para hoy.")
+        print("No hay juegos programados para hoy o hubo un error al obtenerlos.")
         return
-
-    print("-" * 50)
-    print(f"BANKROLL ACTUAL: ${CURRENT_BANKROLL:.2f}")
-    print("-" * 50)
-    
+        
     bets_found = 0
-
-    for g in games:
-        if g['status'] in ['Final', 'In Progress']: continue
+    
+    for game in games:
+        if game['status'] in ['Final', 'In Progress']: 
+            continue
             
-        h_odds, a_odds = get_today_odds(odds_data, today_str, g['home_name'])
-        if h_odds is None: continue
+        h_odds, a_odds = get_today_odds(odds_data, today_str, game['home_name'])
+        if h_odds is None or a_odds is None: 
+            continue
 
-        res = predictor.predict_game(g)
-        if 'error' in res: continue
+        # 1. Predicción cruda
+        res = predictor.predict_game(game)
+        if 'error' in res: 
+            continue
+            
+        home_prob = res['home_prob']
+        away_prob = res['away_prob']
+        max_prob = max(home_prob, away_prob)
         
-        prob = res['confidence']
-        pick = res['winner']
-        curr_odds = h_odds if pick == g['home_name'] else a_odds
+        # =========================================================
+        # CANDADO 1: FILTRO DE CONFIANZA CENTRALIZADO
+        # =========================================================
+        if max_prob < CONFIDENCE_THRESHOLD:
+            continue
+            
+        # =========================================================
+        # CANDADO 2: FILTRO DE SENSIBILIDAD E INCERTIDUMBRE (FIX #4)
+        # =========================================================
+        sensitivity = res.get('raw_sensitivity', 1.0)
+        if sensitivity > MAX_SENSITIVITY:
+            print(f"  [NOISE] {game['home_name']} vs {game['away_name']}: ±{sensitivity*100:.1f}% incertidumbre. Saltando.")
+            continue
+            
+        # 3. Datos de la apuesta
+        pick = game['home_name'] if max_prob == home_prob else game['away_name']
+        prob = max_prob
+        curr_odds = h_odds if pick == game['home_name'] else a_odds
+        game_title = f"{game['away_name']} @ {game['home_name']}"
         
-        # Filtros de Riesgo
-        if prob < CONFIDENCE_THRESHOLD: continue
-        if curr_odds < 0 and curr_odds < MAX_ODDS_LIMIT: continue
+        # Límite de Momios Fuertes (ej. no apostar a un -300)
+        if curr_odds < MAX_ODDS_LIMIT:
+            continue
 
-        stake_pct = calculate_kelly(prob, curr_odds, fraction=KELLY_FRACTION)
-        if stake_pct <= 0: continue 
-        
-        stake_amount = CURRENT_BANKROLL * stake_pct
-        bets_found += 1
-        
-        # Cálculos para el Tracker
-        game_title = f"{g['away_name']} @ {g['home_name']}"
-        # Eliminación del Vig: Obtenemos el Fair Value real
+        # 4. Finanzas e Inversión
         fair_h, fair_a = get_fair_prob(h_odds, a_odds)
+        market_prob = fair_h if pick == game['home_name'] else fair_a
         
-        # Seleccionamos la probabilidad justa que corresponde a nuestro pick
-        market_prob = fair_h if pick == g['home_name'] else fair_a
-        
-        # Cálculo de Edge Real (Alpha) sobre Fair Value usando el motor financiero
         edge_report = calculate_edge(prob, market_prob)
         edge = edge_report['edge']
 
-        # Si después de quitar el Vig el Edge es negativo o cero, abortamos la operación
+        # Si el Edge es negativo, abortamos
         if edge <= 0:
             continue
+            
+        bets_found += 1
         
-        print(f"\nAPUESTA APROBADA: {game_title}")
+        # Cálculo de Criterio de Kelly (Tamaño de Inversión)
+        stake_pct = calculate_kelly(prob, curr_odds, fraction=KELLY_FRACTION)
+        stake_amount = CURRENT_BANKROLL * stake_pct
+        
+        print(f"\n✅ APUESTA APROBADA: {game_title}")
         print(f"PICK: {pick} | Prob Modelo: {prob*100:.1f}% | Momio: {curr_odds}")
         print(f"INVERSIÓN: ${stake_amount:.2f} ({stake_pct*100:.2f}% del Bankroll)")
         
-        # Guardar automáticamente en el historial (CSV)
         saved = tracker.log_bet(
             fecha=today_str,
             juego=game_title,

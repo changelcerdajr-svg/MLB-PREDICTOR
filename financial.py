@@ -1,5 +1,6 @@
 # financial.py - Motor de Riesgo Institucional V17.9 (Shin Optimized)
 from scipy.optimize import brentq
+from config import KELLY_FRACTION
 
 def american_to_prob(odds: int) -> float:
     """Convierte un momio americano a probabilidad implícita."""
@@ -8,7 +9,7 @@ def american_to_prob(odds: int) -> float:
     else:
         return abs(odds) / (abs(odds) + 100.0)
     
-def calculate_kelly(prob_win, american_odds, fraction=0.25):
+def calculate_kelly(prob_win, american_odds, fraction=KELLY_FRACTION):
     """
     Calcula el tamaño de la apuesta usando el Criterio de Kelly fraccionado (V18.0).
     fraction: 0.25 para 1/4 Kelly (Gestión de riesgo institucional).
@@ -88,7 +89,7 @@ def calculate_edge(model_prob: float, market_prob_clean: float) -> dict:
         # b es el multiplicador de ganancia neta en base a la prob del mercado
         b = (1.0 / market_prob_clean) - 1.0
         full_kelly = edge / b
-        kelly_fraction = max(0.0, full_kelly * 0.25)
+        kelly_fraction = max(0.0, full_kelly * KELLY_FRACTION)
     else:
         kelly_fraction = 0.0
 

@@ -1,19 +1,30 @@
 # config.py
-# Configuración Global - V12.3 (Sincronización Institucional con HFA Dinámico)
+# Configuración Global - V17.9 (Sincronización Institucional con HFA Dinámico)
 
 # 1. API
 API_URL = "https://statsapi.mlb.com/api/v1"
-USER_AGENT = "Mozilla/5.0 (MLB-Predictor-Pro/12.3)"
+USER_AGENT = "Mozilla/5.0 (MLB-Predictor-Pro/17.9)"
 
-# 2. SIMULACIÓN
-SIMULATION_ROUNDS = 10000     # Optimizado para convergencia estadística
-STRESS_TEST_ROUNDS = 2000     # Para el cálculo de Sensibilidad (Stress Testing)
+# ==========================================
+# 2. CENTRO DE GESTIÓN DE RIESGO (V17.9)
+# ==========================================
+CONFIDENCE_THRESHOLD = 0.50
+MAX_ODDS_LIMIT = -170
+KELLY_FRACTION = 0.125  # (Octavo de Kelly)
+MAX_SENSITIVITY = 0.08
+MARKOV_MULTIPLIER = 1.05
+EXTRA_INNING_MULTIPLIER = 1.6
 
-CONFIDENCE_THRESHOLD = 0.55
-MAX_ODDS_LIMIT = -250
+# ==========================================
+# 3. MOTOR DE MONTE CARLO (Simulación)
+# ==========================================
+SIMULATION_ROUNDS = 10000
+STRESS_TEST_ROUNDS = 3000
 
-# 3. FACTORES DE PARQUE (Park Factors - Base Carreras Totales)
+# ==========================================
+# 4. FACTORES DE PARQUE (Park Factors - Base Carreras Totales)
 # > 1.00 = Favorece Ofensiva | < 1.00 = Favorece Pitcheo
+# ==========================================
 PARK_FACTORS = {
     'runs': {
         1: 0.99,   # Angel Stadium
@@ -53,46 +64,50 @@ PARK_FACTORS = {
 RAW_WOBA_REGRESSOR = 0.885 
 LINEUP_PA_VOLUME_MULTIPLIERS = [1.32, 1.28, 1.15, 1.05, 1.00, 0.92, 0.85, 0.78, 0.65]
 
-# 4. HOME FIELD ADVANTAGE (HFA) DINÁMICO
-# Mapeo oficial de HFA calibrado por Venue ID de la MLB API
+# ==========================================
+# 5. HOME FIELD ADVANTAGE (HFA) DINÁMICO EMPÍRICO
+# Base 1.000 = Neutral. Valores calibrados 2021-2024
+# ==========================================
 STADIUM_HFA = {
-    1: 1.040,  # Angel Stadium (LAA)
-    2: 1.040,  # Oriole Park (BAL)
-    3: 1.055,  # Tropicana Field (TB) - Domo, alto rebote
+    1: 1.035,  # Angel Stadium (LAA)
+    2: 1.045,  # Oriole Park (BAL)
+    3: 1.055,  # Tropicana Field (TB) - Ventaja fuerte por domo y turf
     5: 1.040,  # Progressive Field (CLE)
-    7: 1.040,  # Kauffman Stadium (KC)
-    8: 1.040,  # Comerica Park (DET)
-    9: 1.045,  # Fenway Park (BOS)
+    7: 1.038,  # Kauffman Stadium (KC)
+    8: 1.035,  # Comerica Park (DET)
+    9: 1.050,  # Fenway Park (BOS) - Dimensiones extrañas favorecen al local
     10: 1.045, # Rogers Centre (TOR)
-    11: 1.040, # T-Mobile Park (SEA)
-    12: 1.040, # Guaranteed Rate Field (CWS)
+    11: 1.042, # T-Mobile Park (SEA)
+    12: 1.038, # Guaranteed Rate Field (CWS)
     13: 1.040, # Target Field (MIN)
-    14: 1.040, # Oakland Coliseum (OAK)
-    15: 1.040, # Chase Field (AZ)
-    16: 1.040, # Truist Park (ATL)
-    17: 1.040, # Wrigley Field (CHC)
+    14: 1.035, # Oakland Coliseum (OAK)
+    15: 1.042, # Chase Field (AZ)
+    16: 1.048, # Truist Park (ATL) - Público hostil
+    17: 1.045, # Wrigley Field (CHC)
     18: 1.040, # Great American Ball Park (CIN)
-    19: 1.060, # Coors Field (COL) - Altitud extrema
-    20: 1.040, # American Family Field (MIL)
-    21: 1.040, # Citizens Bank Park (PHI)
-    22: 1.040, # Dodger Stadium (LAD)
-    23: 1.040, # Nationals Park (WSH)
-    24: 1.040, # Oracle Park (SF)
-    25: 1.040, # Petco Park (SD)
-    26: 1.035, # Busch Stadium (STL)
+    19: 1.065, # Coors Field (COL) - Altitud extrema, mayor ventaja de la liga
+    20: 1.042, # American Family Field (MIL)
+    21: 1.048, # Citizens Bank Park (PHI) - Público muy hostil
+    22: 1.045, # Dodger Stadium (LAD)
+    23: 1.035, # Nationals Park (WSH)
+    24: 1.025, # Oracle Park (SF) - Baja ventaja local empírica
+    25: 1.028, # Petco Park (SD) - Clima perfecto, neutraliza ventaja
+    26: 1.042, # Busch Stadium (STL)
     27: 1.041, # Globe Life Field (TEX)
-    29: 1.040, # loanDepot park (MIA)
-    30: 1.040, # PNC Park (PIT)
-    31: 1.040, # Citi Field (NYM)
-    32: 1.045, # Yankee Stadium (NYY)
-    33: 1.037  # Minute Maid Park (HOU)
+    29: 1.025, # loanDepot park (MIA) - Poca asistencia, domo
+    30: 1.035, # PNC Park (PIT)
+    31: 1.030, # Citi Field (NYM)
+    32: 1.052, # Yankee Stadium (NYY) - "Porche corto", localía pesada
+    33: 1.045  # Minute Maid Park (HOU)
 }
 
 def get_hfa_factor(venue_id):
     """Retorna el peso real de la localía para el estadio solicitado."""
     return STADIUM_HFA.get(venue_id, 1.04)
 
-# 5. COORDENADAS GEOGRÁFICAS COMPLETAS (Indexadas por TEAM_ID)
+# ==========================================
+# 6. COORDENADAS GEOGRÁFICAS COMPLETAS 
+# ==========================================
 STADIUM_COORDS = {
     108: {'lat': 33.8003, 'lon': -117.8827}, # LAA
     109: {'lat': 33.4455, 'lon': -112.0667}, # ARI
@@ -126,6 +141,9 @@ STADIUM_COORDS = {
     158: {'lat': 43.0280, 'lon': -87.9712}   # MIL
 }
 
-# 6. FECHA
-USE_REAL_TIME = True  #
-TEST_DATE = "2026-03-27" #
+# ==========================================
+# 7. FECHA
+# ==========================================
+USE_REAL_TIME = True  
+TEST_DATE = "2026-03-27"
+USE_HOT_HAND_GLOBAL = False

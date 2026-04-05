@@ -3,10 +3,12 @@
 
 import requests
 import datetime
-import numpy as np
 import pandas as pd
 from config import API_URL, USER_AGENT, USE_REAL_TIME, TEST_DATE, STADIUM_COORDS
 from config import RAW_WOBA_REGRESSOR, LINEUP_PA_VOLUME_MULTIPLIERS
+import json
+import time
+import functools
 
 # Importamos nuestro nuevo motor de extracción
 from statcast_scraper import StatcastScraper
@@ -18,18 +20,22 @@ from statcast_scraper import StatcastScraper
 # (xwOBA/xERA) son resistentes a rachas, por lo que el volumen de muestra 
 # es mejor predictor del talento real que la recencia cronológica.
 # =====================================================================
-K_BATTER_XWOBA = 50  # Punto de estabilización de contacto (Aprox 50 PA)
-K_PITCHER_XERA = 30  # Punto de estabilización de pitcheo (Aprox 30 IP)
-LEAGUE_AVG_XWOBA = 0.315 # Baseline histórico
+K_BATTER_XWOBA = 150
+K_PITCHER_XERA = 80 # Punto de estabilización de pitcheo (Aprox 30 IP)
+LEAGUE_AVG_XWOBA = 0.315
 LEAGUE_AVG_XERA = 4.00   # Baseline histórico
 # =====================================================================
 
 class MLBDataLoader:
     def __init__(self):
+        # FIX DE RENDIMIENTO: Mantener el túnel de internet abierto (Connection Pooling)
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': USER_AGENT})
         
-        import datetime
+        # Opcional pero recomendado: decirle a la API que somos un navegador normal
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        
         self.current_season_year = datetime.datetime.now().year 
         
         self.standings_cache = {} 
@@ -40,7 +46,6 @@ class MLBDataLoader:
         # Carga en memoria de la Capa 2 (Hot Hand)
         self.hot_hand_data = {}
         try:
-            import json
             with open('data_odds/hot_hand.json', 'r') as f:
                 self.hot_hand_data = json.load(f)
         except Exception:
@@ -60,18 +65,17 @@ class MLBDataLoader:
 
         self._force_historical_mode = False
         self.savant = StatcastScraper()
+        self._pitcher_hand_cache = {} 
 
     def reload_hot_hand(self):
-            """Actualiza el caché en memoria para la simulación de ventana móvil."""
-            import json
-            try:
-                with open('data_odds/hot_hand.json', 'r') as f:
-                    self.hot_hand_data = json.load(f)
-            except Exception:
-                self.hot_hand_data = {}
+        """Actualiza el caché en memoria para la simulación de ventana móvil."""
+        try:
+            with open('data_odds/hot_hand.json', 'r') as f:
+                self.hot_hand_data = json.load(f)
+        except Exception:
+            self.hot_hand_data = {}
 
-    def _get(self, endpoint, params=None, timeout=15):
-        import time 
+    def _get(self, endpoint, params=None, timeout=15): 
         url = f"{API_URL}/{endpoint}"
         max_retries = 3
         retries = 0
@@ -100,7 +104,15 @@ class MLBDataLoader:
 
     def get_schedule(self, date_str):
         """Obtiene el calendario de juegos de la API de MLB para una fecha dada."""
+        
+        # --- FIX FASE 3: Limpiar caché si cambiamos de año y guardar contexto ---
+        if int(date_str[:4]) != getattr(self, 'current_season_year', 0):
+            self.get_pitcher_xera_stats.cache_clear() # Evita contaminación de años pasados
+            
         self.current_season_year = int(date_str[:4])
+        
+        # --- FIX 5: Guardar la fecha actual de la simulación ---
+        self._current_date_context = date_str 
         
         params = {'sportId': 1, 'date': date_str, 'hydrate': 'lineups,probablePitcher,team'}
         data = self._get("schedule", params)
@@ -161,29 +173,26 @@ class MLBDataLoader:
                     
         return games_list
 
+    @functools.lru_cache(maxsize=None)
     def get_league_run_environment(self, date_str):
         try:
             data = self._get("standings", {'leagueId': '103,104', 'season': date_str[:4], 'date': date_str, 'hydrate': 'team'})
-            total_runs = 0
-            total_games = 0
+            total_runs, total_games = 0, 0
+            
             if data and 'records' in data:
                 for division in data['records']:
                     for team in division['teamRecords']:
                         runs = int(team.get('runsScored', 0))
-                        wins = int(team.get('wins', 0))
+                        # FIX M6/FINDING #2: Usar juegos jugados reales
+                        games_played = int(team.get('gamesPlayed', 0))
                         
                         total_runs += runs
+                        total_games += games_played
                         
-                        # FIX BUG #3: Solo sumamos 'wins' para no contar doble los partidos
-                        total_games += wins
-            if total_games > 0:
-                league_avg = total_runs / total_games
-                if total_games < 200: 
-                    weight = total_games / 200
-                    league_avg = (league_avg * weight) + (4.30 * (1 - weight))
-                return league_avg
+            if total_games >= 30:
+                return total_runs / total_games
         except: pass
-        return 4.30 
+        return 4.30
 
     def _apply_bayesian_shrinkage(self, current_val, sample_size, k_factor, prior_val):
         if sample_size <= 0: return prior_val
@@ -253,17 +262,24 @@ class MLBDataLoader:
         self.player_history_cache[cache_key] = res
         return res
     
+    @functools.lru_cache(maxsize=None)
     def get_pitcher_xera_stats(self, player_id, year=None):
-        import datetime
         if year is None:
             year = getattr(self, 'current_season_year', datetime.date.today().year)
             
         raw_xera = self.savant.get_pitcher_xera(player_id, year)
         if raw_xera is None:
             raw_xera = self.savant.get_pitcher_xera(player_id, year - 1)
-            
-        # Obtener IP (Innings Pitched) para shrinkage y el K9 real
-        ip_data = self._get(f"people/{player_id}/stats", {'stats': 'season', 'group': 'pitching'})
+
+        current_date_limit = getattr(self, '_current_date_context', f"{year}-12-31")
+        start_d = f"{year}-03-01"
+
+        ip_data = self._get(f"people/{player_id}/stats", {
+            'stats': 'byDateRange', 
+            'group': 'pitching', 
+            'startDate': start_d,
+            'endDate': current_date_limit
+        })
         current_ip = 0.0
         current_k9 = 7.5 # Promedio por defecto
         current_bf = 0.0 
@@ -305,22 +321,37 @@ class MLBDataLoader:
         # Retornamos IP para el simulador
         return {'xera': final_xera, 'k9': current_k9, 'ip': current_ip, 'babip': current_babip}
 
-    def _blend_hot_hand(self, base_xwoba, player_id, hot_hand_cache, weight=0.20):
-        recent = hot_hand_cache.get(str(player_id)) or hot_hand_cache.get(int(player_id))
-        if recent is None:
-            return base_xwoba  
+    def _blend_hot_hand(self, base_xwoba, player_id, hot_hand_cache, weight=0.05):
+        """
+        Mezcla el xwOBA base con el rendimiento reciente (10 días).
+        JUSTIFICACIÓN DEL PESO (0.05): 
+        Estudios sabermétricos (Tango, Lichtman) demuestran que en ventanas de 10 días,
+        el ratio señal/ruido del contacto es cercano a cero. El mercado (Vegas) ya ajusta 
+        sus líneas basándose en rachas recientes. Asignar más del 5% significa apostar 
+        en contra de líneas ya castigadas (comprar caro).
+        """
+        if not hot_hand_cache or str(player_id) not in hot_hand_cache:
+            return base_xwoba
             
-        # Normalización matemática: escalamos el xwOBAcon al entorno del xwOBA general
+        recent = hot_hand_cache[str(player_id)]
+        if recent == 0:
+            return base_xwoba
+            
         normalized_recent = recent * (LEAGUE_AVG_XWOBA / 0.380)
         
-        # Al estar normalizado, podemos usar un peso ligeramente más agresivo (20%)
         return (base_xwoba * (1.0 - weight)) + (normalized_recent * weight)
     
-    def get_confirmed_lineup_xwoba(self, game_pk, team_type, vs_hand=None, team_id=None, use_hot_hand=True):
+    # NUEVO ASISTENTE CON CACHÉ
+    @functools.lru_cache(maxsize=1000)
+    def get_game_lineups_data(self, game_pk):
+        return self._get(f"schedule?gamePk={game_pk}&hydrate=lineups")
+    
+    def get_confirmed_lineup_xwoba(self, game_pk, team_type, vs_hand=None, use_hot_hand=True):
         try:
-            # 1. Buscamos el lineup en el endpoint de schedule (disponible pre-juego)
-            url = f"schedule?gamePk={game_pk}&hydrate=lineups"
-            data = self._get(url)
+            # FIX: Usar el asistente cacheado (y NADA MÁS)
+            data = self.get_game_lineups_data(game_pk)
+            
+            # ¡Las líneas de "url = ..." y "self._get(url)" fueron eliminadas!
             
             if not data or 'dates' not in data or not data['dates']:
                 return (None, False)
@@ -343,7 +374,14 @@ class MLBDataLoader:
 
             # --- LÓGICA MATEMÁTICA ORIGINAL ---
             ids_str = ",".join([str(x) for x in batters_ids])
-            people_data = self._get("people", {'personIds': ids_str, 'hydrate': 'stats(group=[hitting],type=[season])'})
+            
+            # FIX 5: Prevenir Lookahead Bias. Limitar PA hasta el día del backtest.
+            start_d = f"{self.current_season_year}-03-01"
+            end_d = getattr(self, '_current_date_context', f"{self.current_season_year}-12-31")
+            
+            hydrate_query = f'stats(group=[hitting],type=[byDateRange],startDate={start_d},endDate={end_d})'
+            
+            people_data = self._get("people", {'personIds': ids_str, 'hydrate': hydrate_query})
             
             xwoba_map = {}
             if people_data and 'people' in people_data:
@@ -358,13 +396,13 @@ class MLBDataLoader:
                     
                     savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year, vs_hand=vs_hand)
 
-                    # Si no hay muestra suficiente en el split, usamos el global como respaldo (Shrinkage)
                     if savant_xwoba is None:
+                        # FIX Feature #21: Notificación de degradación de datos
+                        # Descomenta el print si quieres que la terminal te avise de esto en el run_daily_picks
+                        # print(f"  [i] Bateador {pid}: Sin splits vs {vs_hand}. Usando promedio general.")
                         savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
-                    
-                    # Si es novato o tiene pocos turnos vs esa mano, usamos el global como respaldo
                     if savant_xwoba is None:
-                        savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year)
+                       savant_xwoba = self.savant.get_batter_xwoba(pid, self.current_season_year - 1)
                     
                     # Prior histórico
                     prior_xwoba = self._get_prior_stats(pid, 'hitting')
@@ -383,7 +421,6 @@ class MLBDataLoader:
                     )
                     
                     # --- INICIO INTEGRACIÓN CAPA 2 (HOT HAND) ---
-                    # Llamamos a la función modular usando el caché en memoria y la calibración del 18%
                     if use_hot_hand:
                         projected_xwoba = self._blend_hot_hand(projected_xwoba, pid, self.hot_hand_data)
                     
@@ -410,21 +447,24 @@ class MLBDataLoader:
         return (None, False)
     
     # El resto de las funciones se mantienen sin cambios estructurales
-    def get_team_fielding_speed(self, team_id):
-        res = {'fielding': 0.985, 'sb_game': 0.5} 
+    @functools.lru_cache(maxsize=None)
+    def get_team_fielding_speed(self, team_id, year):
+        res = {'fielding': 0.985}
         try:
-            f_data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'fielding'})
+            # FIX: Se añadió el season: year a la petición de la API
+            f_data = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'fielding', 'season': year})
             if f_data and 'stats' in f_data and f_data['stats'] and f_data['stats'][0].get('splits'):
                 res['fielding'] = float(f_data['stats'][0]['splits'][0]['stat'].get('fielding', 0.985))
         except: pass
         return res
     
-    def get_team_discipline(self, team_id):
+    @functools.lru_cache(maxsize=None)
+    def get_team_discipline(self, team_id, year):
         STABILIZATION_PA = 1140.0 
         
         try:
-            # 1. Datos 2026 (Fijate en el sportId: 1)
-            data_cur = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting', 'season': self.current_season_year, 'sportId': 1})
+            # FIX: Reemplazado self.current_season_year por la variable year
+            data_cur = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting', 'season': year, 'sportId': 1})
             pa_cur, so_cur = 0.0, 0.0
             
             if data_cur and 'stats' in data_cur and data_cur['stats'] and data_cur['stats'][0].get('splits'):
@@ -438,8 +478,8 @@ class MLBDataLoader:
             if pa_cur >= STABILIZATION_PA:
                 return so_cur / pa_cur if pa_cur > 0 else 0.22
                 
-            # 2. Carryover 2025 (Fijate en el sportId: 1)
-            data_prev = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting', 'season': self.current_season_year - 1, 'sportId': 1})
+            # FIX: Reemplazado por year - 1
+            data_prev = self._get(f"teams/{team_id}/stats", {'stats': 'season', 'group': 'hitting', 'season': year - 1, 'sportId': 1})
             pa_prev, so_prev = 0.0, 0.0
             
             if data_prev and 'stats' in data_prev and data_prev['stats'] and data_prev['stats'][0].get('splits'):
@@ -449,30 +489,35 @@ class MLBDataLoader:
                 
             k_rate_prev = so_prev / pa_prev if pa_prev > 0 else 0.22
             
-            # --- CANDADO DE SEGURIDAD ABSOLUTA ---
-            # Un equipo de MLB JAMAS tiene un K% menor a 12% ni mayor a 35%. 
             if k_rate_prev < 0.12 or k_rate_prev > 0.35: 
                 k_rate_prev = 0.22
                 
             k_rate_cur = so_cur / pa_cur if pa_cur > 0 else k_rate_prev
             
-            # 3. Mezcla Proporcional
             weight_cur = min(1.0, pa_cur / STABILIZATION_PA)
             final_k = (k_rate_cur * weight_cur) + (k_rate_prev * (1.0 - weight_cur))
             
             return final_k
             
         except Exception: 
-            return 0.22 
+            return 0.22
     
-    def get_batted_ball_profile(self, entity_id, is_pitcher=False):
+    @functools.lru_cache(maxsize=None)
+    def get_batted_ball_profile(self, entity_id, year, is_pitcher=False):
         STABILIZATION_VOL = 120.0 if is_pitcher else 1140.0
         
         try:
             group = 'pitching' if is_pitcher else 'hitting'
             endpoint = f"people/{entity_id}/stats" if is_pitcher else f"teams/{entity_id}/stats"
             
-            data_cur = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year, 'sportId': 1})
+            # FIX: Usamos year
+            data_cur = self._get(endpoint, {
+                'stats': 'season', 
+                'group': group, 
+                'season': year, 
+                'sportId': 1
+            })
+            
             vol_cur, goao_cur = 0.0, 0.0
             
             if data_cur and 'stats' in data_cur and data_cur['stats'] and data_cur['stats'][0].get('splits'):
@@ -483,20 +528,20 @@ class MLBDataLoader:
             if vol_cur >= STABILIZATION_VOL and goao_cur > 0:
                 return goao_cur
                 
-            # Carryover 2025
-            data_prev = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year - 1, 'sportId': 1})
-            goao_prev = 1.0
+            # FIX: Usamos year - 1
+            data_prev = self._get(endpoint, {
+                'stats': 'season', 
+                'group': group, 
+                'season': year - 1, 
+                'sportId': 1
+            })
             
+            goao_prev = 1.0
             if data_prev and 'stats' in data_prev and data_prev['stats'] and data_prev['stats'][0].get('splits'):
                 s_prev = data_prev['stats'][0]['splits'][0]['stat']
                 goao_prev = float(s_prev.get('groundOutsToAirOuts', 1.0))
                 
-            # --- CANDADO DE SEGURIDAD ABSOLUTA ---
-            if goao_prev <= 0: goao_prev = 1.0
-            if goao_cur <= 0: goao_cur = goao_prev
-                
             final_goao = goao_cur if vol_cur > 0 else goao_prev
-            
             if vol_cur > 0:
                 weight_cur = min(1.0, vol_cur / STABILIZATION_VOL)
                 final_goao = (goao_cur * weight_cur) + (goao_prev * (1.0 - weight_cur))
@@ -505,48 +550,10 @@ class MLBDataLoader:
             
         except Exception: 
             return 1.0
-    
-    def get_batted_ball_profile(self, entity_id, is_pitcher=False):
-        # Estabilizacion: 30 juegos de equipo (1140 PA) o ~30 IP para pitchers (120 BF)
-        STABILIZATION_VOL = 120.0 if is_pitcher else 1140.0
-        
-        try:
-            group = 'pitching' if is_pitcher else 'hitting'
-            endpoint = f"people/{entity_id}/stats" if is_pitcher else f"teams/{entity_id}/stats"
-            
-            data_cur = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year})
-            vol_cur, goao_cur = 0.0, 0.0
-            
-            if data_cur and 'stats' in data_cur and data_cur['stats'] and data_cur['stats'][0].get('splits'):
-                s_cur = data_cur['stats'][0]['splits'][0]['stat']
-                vol_cur = float(s_cur.get('battersFaced', s_cur.get('plateAppearances', 0)))
-                goao_cur = float(s_cur.get('groundOutsToAirOuts', 1.0))
-                
-            if vol_cur >= STABILIZATION_VOL:
-                return goao_cur
-                
-            # Carryover 2025
-            data_prev = self._get(endpoint, {'stats': 'season', 'group': group, 'season': self.current_season_year - 1})
-            goao_prev = 1.0
-            
-            if data_prev and 'stats' in data_prev and data_prev['stats'] and data_prev['stats'][0].get('splits'):
-                s_prev = data_prev['stats'][0]['splits'][0]['stat']
-                goao_prev = float(s_prev.get('groundOutsToAirOuts', 1.0))
-                
-            final_goao = goao_cur if vol_cur > 0 else goao_prev
-            if vol_cur > 0:
-                weight_cur = vol_cur / STABILIZATION_VOL
-                final_goao = (goao_cur * weight_cur) + (goao_prev * (1.0 - weight_cur))
-                
-            return final_goao
-            
-        except Exception as e: 
-            return 1.0
 
-    def get_bullpen_stats(self, team_id):
-        # Estadísticas base por si la API falla
+    @functools.lru_cache(maxsize=None)
+    def get_bullpen_stats(self, team_id, date_str): # <--- SE AGREGÓ date_str
         stats = {'era': 4.00, 'whip': 1.30, 'fip': 4.10, 'high_leverage_fip': 4.00}
-        
         try:
             # Consultamos el Roster Activo hidratado con las estadísticas de la temporada actual
             url = f"teams/{team_id}/roster"
@@ -575,8 +582,9 @@ class MLBDataLoader:
                                 k = int(s.get('strikeouts', 0))
                                 saves = int(s.get('saves', 0))
                                 
-                                # Cálculo de FIP individual
-                                fip = ((13 * hr) + (3 * bb) - (2 * k)) / max(1.0, ip) + 3.20 if ip > 0 else 4.10
+                                # FIX MEDIO 7: Límite físico realista para evitar FIPs negativos
+                                raw_fip = ((13 * hr) + (3 * bb) - (2 * k)) / ip + 3.20 if ip > 0 else 4.10
+                                fip = max(1.50, raw_fip)
                                 
                                 relievers.append({
                                     'ip': ip, 'fip': fip, 'era': era, 'saves': saves
@@ -592,8 +600,14 @@ class MLBDataLoader:
                         weighted_fip, weighted_era = 4.10, 4.00
 
                     # 2. High Leverage Bullpen (Los 3 relevistas con más salvamentos/IP - 8vo y 9no inning)
-                    relievers.sort(key=lambda x: (x['saves'], x['ip']), reverse=True)
-                    top_3 = relievers[:3]
+                    # FIX M5: Ordenar bullpen por talento real (FIP) y no por salvamentos
+                    high_leverage_candidates = [r for r in relievers if r.get('ip', 0) >= 8]
+                    if not high_leverage_candidates:
+                        high_leverage_candidates = relievers
+                        
+                    # Ordenamos de menor a mayor FIP (menor FIP es mejor pitcher)
+                    high_leverage_candidates.sort(key=lambda x: x.get('fip', 5.00))
+                    top_3 = high_leverage_candidates[:3]
                     top3_ip = sum(r['ip'] for r in top_3)
                     
                     if top3_ip > 0:
@@ -608,20 +622,6 @@ class MLBDataLoader:
             print(f"Error procesando High-Leverage Bullpen: {e}")
             
         return stats
-
-    
-    def get_team_pythagorean_data(self, team_id, date_str=None):
-        try:
-            params = {'leagueId': '103,104', 'season': self.current_season_year}
-            if date_str: params['date'] = date_str
-            data = self._get("standings", params) 
-            if data and 'records' in data:
-                for d in data['records']:
-                    for r in d['teamRecords']:
-                        if r['team']['id'] == team_id: 
-                            return r.get('runsScored',0), r.get('runsAllowed',0)
-        except: pass
-        return 0, 0
 
     def get_team_momentum(self, team_id, date_str):
         if date_str in self.standings_cache:
@@ -659,7 +659,6 @@ class MLBDataLoader:
 
         fatigue_penalty = 0.0
         try:
-            import datetime 
             date_obj = datetime.datetime.strptime(game_date, "%Y-%m-%d")
             
             if date_obj.month == 3 or (date_obj.month == 4 and date_obj.day <= 7): 
@@ -726,17 +725,20 @@ class MLBDataLoader:
         except Exception as e: 
             return 0.10
 
+    @functools.lru_cache(maxsize=None)
     def get_pitcher_hand(self, pid):
         if not pid: return 'R'
+        
         try:
             d = self._get(f"people/{pid}")
             if d and 'people' in d and len(d['people']) > 0:
                 return d['people'][0]['pitchHand']['code']
-        except: pass
+        except Exception: 
+            pass
         return 'R'
 
-    def get_travel_schedule_window(self, target_date_str, days_back=2):
-        import datetime
+    @functools.lru_cache(maxsize=None)
+    def get_travel_schedule_window(self, target_date_str, days_back=5):
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d")
         start_date = (target_date - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
         data = self._get("schedule", {'sportId': 1, 'startDate': start_date, 'endDate': target_date_str})
@@ -797,10 +799,8 @@ class MLBDataLoader:
                 'current_weather': 'true'
             }
             # Tiempo de espera de 5s para no bloquear el hilo principal
-            d = requests.get(url, params=params, timeout=5).json()
+            d = self.session.get(url, params=params, timeout=5).json()
             return d['current_weather']
         except: 
             # Fallback neutral si la API de clima falla
             return {'temperature': 20, 'windspeed': 5, 'winddirection': 45}
-        
-    def get_pitcher_stats(self, pid): return self.get_pitcher_xera_stats(pid)

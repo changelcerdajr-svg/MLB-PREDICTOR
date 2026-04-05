@@ -7,16 +7,21 @@ from data_loader import MLBDataLoader
 from features import FeatureEngine
 
 class MLBPredictor:
-    def __init__(self, use_calibrator=True, use_hot_hand=True):
+    def __init__(self, use_calibrator=True, use_hot_hand=True, experiments=None):
         self.loader = MLBDataLoader()
         self.engine = FeatureEngine()
-        self.use_hot_hand = use_hot_hand # Guardamos la preferencia
+        self.use_hot_hand = use_hot_hand
+        
+        # Si no se mandan experimentos, todo está encendido por defecto
+        self.active_features = experiments or {
+            'jetlag': True, 'weather': True, 'trajectory': True, 'markov': True
+        }
         
         self.calibrator = None
         if use_calibrator:
             try:
-                if os.path.exists('isotonic_calibrator.pkl'):
-                    with open('isotonic_calibrator.pkl', 'rb') as f:
+                if os.path.exists('temperature_calibrator.pkl'):
+                    with open('temperature_calibrator.pkl', 'rb') as f:
                         self.calibrator = pickle.load(f)
             except Exception as e:
                 print(f"Calibrador no cargado: {e}")
@@ -24,14 +29,15 @@ class MLBPredictor:
 
     def predict_game(self, game):
         # 1. Preparación de Entorno
-        # Cambiamos days_back=2 por days_back=5 para capturar viajes largos y días libres
         schedule_df = self.loader.get_travel_schedule_window(game['date'], days_back=5)
         league_avg_runs = self.loader.get_league_run_environment(game['date'])
         
-        # 2. Pitcheo con xERA y Mano del Lanzador
-        # 2. Pitcheo con xERA, K/9 e IP para Incertidumbre (V18.0)
-        h_pstats = self.loader.get_pitcher_xera_stats(game['home_pitcher'])
-        a_pstats = self.loader.get_pitcher_xera_stats(game['away_pitcher'])
+        # Extraemos el año desde la fecha del juego directamente
+        game_year = int(game['date'][:4])
+        
+        # 2. Pitcheo con xERA, K/9 e IP para Incertidumbre (Forzando el año)
+        h_pstats = self.loader.get_pitcher_xera_stats(game['home_pitcher'], year=game_year)
+        a_pstats = self.loader.get_pitcher_xera_stats(game['away_pitcher'], year=game_year)
         
         h_k9 = h_pstats.get('k9', 9.0)
         a_k9 = a_pstats.get('k9', 9.0)
@@ -41,24 +47,21 @@ class MLBPredictor:
         h_hand = self.loader.get_pitcher_hand(game['home_pitcher'])
         a_hand = self.loader.get_pitcher_hand(game['away_pitcher'])
         
-        h_bullpen = self.loader.get_bullpen_stats(game['home_id'])
-        a_bullpen = self.loader.get_bullpen_stats(game['away_id'])
+        # FIX: Pasarle la fecha para que el caché funcione correctamente
+        h_bullpen = self.loader.get_bullpen_stats(game['home_id'], game['date'])
+        a_bullpen = self.loader.get_bullpen_stats(game['away_id'], game['date'])
 
         # 3. Lineups con xwOBA Real (Platoon Proxy V17.9)
         h_xwoba, h_confirmed = self.loader.get_confirmed_lineup_xwoba(
-            game['id'], 'home', vs_hand=a_hand, team_id=game['home_id'], 
-            use_hot_hand=self.use_hot_hand 
+        game['id'], 'home', vs_hand=a_hand, 
+        use_hot_hand=self.use_hot_hand 
         )
         
         a_xwoba, a_confirmed = self.loader.get_confirmed_lineup_xwoba(
-            game['id'], 'away', vs_hand=h_hand, team_id=game['away_id'],
-            use_hot_hand=self.use_hot_hand 
+        game['id'], 'away', vs_hand=h_hand,
+        use_hot_hand=self.use_hot_hand 
         )
 
-        if not h_confirmed or not a_confirmed:
-            return {'error': 'Lineups no confirmados. Operación bloqueada.'}
-        
-        
         if not h_confirmed or not a_confirmed:
             return {'error': 'Lineups no confirmados. Operación bloqueada.'}
 
@@ -71,68 +74,66 @@ class MLBPredictor:
         pf = self.engine.get_park_factor(game['venue_id'])
         weather_data = self.loader.get_weather(game['venue_id'])
 
-        # 5b. Ajustes Biomecánicos y Balísticos (Contextualizados al Estadio)
-        h_pitcher_goao = self.loader.get_batted_ball_profile(game['home_pitcher'], is_pitcher=True)
-        a_pitcher_goao = self.loader.get_batted_ball_profile(game['away_pitcher'], is_pitcher=True)
-        h_team_goao = self.loader.get_batted_ball_profile(game['home_id'], is_pitcher=False)
-        a_team_goao = self.loader.get_batted_ball_profile(game['away_id'], is_pitcher=False)
+        # Extraemos el año actual del entorno del juego
+        current_year = self.loader.current_season_year
 
-        def calculate_trajectory_multiplier(pitcher_goao, team_goao, park_factor):
-            # M4: Si el parque favorece el bateo (pf > 1), los Fly Balls (GO/AO bajo) son más peligrosos
-            diff = (team_goao - pitcher_goao)
-            
-            # Ajustamos el impacto basándonos en si el estadio ayuda o perjudica
-            park_adjustment = (park_factor - 1.0) 
-            
-            # La interacción ahora suma el contexto del parque
-            multiplier = 1.0 + (diff * 0.05) + (diff * park_adjustment * 0.1)
-            return max(0.92, min(1.08, multiplier))
-
-        # El equipo local batea contra el pitcher visitante en su propio parque
-        h_xwoba_adj *= calculate_trajectory_multiplier(a_pitcher_goao, h_team_goao, pf)
-        # El equipo visitante batea contra el pitcher local en el mismo parque
-        a_xwoba_adj *= calculate_trajectory_multiplier(h_pitcher_goao, a_team_goao, pf)
-
-        # 6. Arsenal Advantage (K9 del Pitcher vs K% del Equipo)
-        def calculate_arsenal_advantage(k9, discipline):
-            # K9 promedio es ~9.0. Disciplina (K%) promedio es ~0.22.
-            pitcher_k_factor = k9 / 9.0
-            team_k_factor = discipline / 0.22
-            impact = (pitcher_k_factor * team_k_factor) - 1.0
-            # Retorna un modificador suave (máximo +/- 5%)
-            return 1.0 - max(-0.05, min(0.05, impact * 0.05))
-
-        h_disc = self.loader.get_team_discipline(game['home_id'])
-        a_disc = self.loader.get_team_discipline(game['away_id'])
-
-        h_xwoba_adj *= calculate_arsenal_advantage(a_k9, h_disc)
-        a_xwoba_adj *= calculate_arsenal_advantage(h_k9, a_disc)
-
-        # 7. Momentum (Neutralizado por Marco Teórico V19.0)
-        h_mom = self.loader.get_team_momentum(game['home_id'], game['date'])
-        a_mom = self.loader.get_team_momentum(game['away_id'], game['date'])
+        # 5a. Obtenemos el Park Factor y Clima
+        pf = self.engine.get_park_factor(game['venue_id'])
         
-        # Fijamos en 1.0 para que no distorsione las variables de Power ni Defense
-        h_streak_mult = 1.0 
-        a_streak_mult = 1.0
+        # INTERRUPTOR CLIMA: Si está apagado, weather_data será None
+        weather_data = None
+        if self.active_features.get('weather', True):
+            weather_data = self.loader.get_weather(game['venue_id'])
 
-        # 8. Defensa y Fatiga (El clima y PF ya se calcularon en el 5a)
+        # Extraemos el año actual del entorno del juego
+        current_year = self.loader.current_season_year
+
+        # 5b. Ajustes Biomecánicos y Balísticos (Contextualizados al Estadio)
+        h_pitcher_goao = self.loader.get_batted_ball_profile(game['home_pitcher'], current_year, is_pitcher=True)
+        a_pitcher_goao = self.loader.get_batted_ball_profile(game['away_pitcher'], current_year, is_pitcher=True)
+        h_team_goao = self.loader.get_batted_ball_profile(game['home_id'], current_year, is_pitcher=False)
+        a_team_goao = self.loader.get_batted_ball_profile(game['away_id'], current_year, is_pitcher=False)
+
+        def calculate_trajectory_multiplier(pitcher_goao, team_goao):
+            diff = (team_goao - pitcher_goao)
+            # MANTENEMOS FIX Feature #23: Coeficiente 0.025 conservador
+            multiplier = 1.0 + (diff * 0.025)
+            return max(0.95, min(1.05, multiplier))
+
+        h_traj_mult = calculate_trajectory_multiplier(a_pitcher_goao, h_team_goao)
+        a_traj_mult = calculate_trajectory_multiplier(h_pitcher_goao, a_team_goao)
+
+        # INTERRUPTOR TRAYECTORIA: Si está apagado, forzamos a 1.0 (neutro)
+        if not self.active_features.get('trajectory', True):
+            h_traj_mult, a_traj_mult = 1.0, 1.0
+
+        h_xwoba_adj = h_xwoba * h_traj_mult
+        a_xwoba_adj = a_xwoba * a_traj_mult
+
+        # 8. Defensa y Fatiga
         h_fatigue = self.loader.get_bullpen_fatigue(game['home_id'], game['date'])
         a_fatigue = self.loader.get_bullpen_fatigue(game['away_id'], game['date'])
-        h_fielding = self.loader.get_team_fielding_speed(game['home_id'])
-        a_fielding = self.loader.get_team_fielding_speed(game['away_id'])
-        # ----------------------------------------
+        h_fielding = self.loader.get_team_fielding_speed(game['home_id'], current_year)
+        a_fielding = self.loader.get_team_fielding_speed(game['away_id'], current_year)
         
-      
         # 9. Generación de Lambda para Monte Carlo
-        h_power = self.engine.calculate_power_score(h_xwoba_adj, pf, league_avg_runs, game['home_id'], game['date'], schedule_df, weather_data, game['venue_id']) * h_streak_mult
-        a_power = self.engine.calculate_power_score(a_xwoba_adj, pf, league_avg_runs, game['away_id'], game['date'], schedule_df, weather_data, game['venue_id']) * a_streak_mult
+        # INTERRUPTOR JETLAG: Si está apagado, pasamos None para que no encuentre viajes previos
+        active_schedule = schedule_df if self.active_features.get('jetlag', True) else None
+
+        h_power = self.engine.calculate_power_score(
+            h_xwoba_adj, pf, league_avg_runs, game['home_id'], 
+            game['date'], active_schedule, weather_data, game['venue_id']
+        )
+        a_power = self.engine.calculate_power_score(
+            a_xwoba_adj, pf, league_avg_runs, game['away_id'], 
+            game['date'], active_schedule, weather_data, game['venue_id']
+        )
         
-        h_def_ra9 = self.engine.calculate_defense_score(h_pstats, h_bullpen, h_fatigue, h_fielding) / h_streak_mult
-        a_def_ra9 = self.engine.calculate_defense_score(a_pstats, a_bullpen, a_fatigue, a_fielding) / a_streak_mult
+        h_def_ra9 = self.engine.calculate_defense_score(h_pstats, h_bullpen, h_fatigue, h_fielding)
+        a_def_ra9 = self.engine.calculate_defense_score(a_pstats, a_bullpen, a_fatigue, a_fielding)
 
         # 10. Simulación Estocástica de Monte Carlo (V17.9 Dynamic HFA + K9 Volatilidad)
-        from config import get_hfa_factor
+        
         hfa_dynamic = get_hfa_factor(game['venue_id']) 
         
         win_prob, h_runs, a_runs, _ = self.engine.run_monte_carlo_simulation(
@@ -142,7 +143,6 @@ class MLBPredictor:
             a_def=a_def_ra9, 
             rounds=SIMULATION_ROUNDS, 
             league_avg_runs=league_avg_runs, 
-            pf=pf,
             h_k9=h_k9,
             a_k9=a_k9,
             h_ip=h_ip, # <--- NUEVO
@@ -154,18 +154,34 @@ class MLBPredictor:
         delta = 0.05
         prob_high, _, _, _ = self.engine.run_monte_carlo_simulation(
             h_power*(1+delta), h_def_ra9, a_power*(1-delta), a_def_ra9, 
-            STRESS_TEST_ROUNDS, league_avg_runs, pf, h_k9, a_k9, h_ip, a_ip, hfa_dynamic
+            STRESS_TEST_ROUNDS, league_avg_runs, h_k9, a_k9, h_ip, a_ip, hfa_dynamic
         )
         prob_low, _, _, _ = self.engine.run_monte_carlo_simulation(
             h_power*(1-delta), h_def_ra9, a_power*(1+delta), a_def_ra9, 
-            STRESS_TEST_ROUNDS, league_avg_runs, pf, h_k9, a_k9, h_ip, a_ip, hfa_dynamic
+            STRESS_TEST_ROUNDS, league_avg_runs, h_k9, a_k9, h_ip, a_ip, hfa_dynamic
         )
+
         input_sensitivity = abs(prob_high - prob_low) / 2
         
-        # 12. Calibración Final
+        # 12. Calibración Final (Temperature Scaling)
         is_calibrated = False
-        if self.calibrator is not None:
-            win_prob = float(self.calibrator.predict([win_prob])[0])
+        if self.calibrator is not None and 'T' in self.calibrator:
+            from scipy.special import logit, expit
+            import numpy as np
+            
+            T = self.calibrator['T']
+            
+            # Clipping de seguridad
+            clipped_home = np.clip(win_prob, 1e-6, 1 - 1e-6)
+            clipped_away = np.clip(1.0 - win_prob, 1e-6, 1 - 1e-6)
+            
+            # Escalar
+            home_prob_cal = float(expit(logit(clipped_home) / T))
+            away_prob_cal = float(expit(logit(clipped_away) / T))
+            
+            # Re-normalizar a 1.0
+            total_prob = home_prob_cal + away_prob_cal
+            win_prob = home_prob_cal / total_prob
             is_calibrated = True
 
         winner = game['home_name'] if win_prob > 0.5 else game['away_name']

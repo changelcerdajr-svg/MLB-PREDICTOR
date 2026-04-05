@@ -1,44 +1,38 @@
-import pandas as pd
+# backtest_comparison.py
 from backtest_master import run_master_backtest
+from statsmodels.stats.proportion import proportions_ztest
 
-def run_comparative_audit(start_date, days=10):
-    print("=== INICIANDO AUDITORÍA COMPARATIVA V18 vs V19 ===")
-    
-    # Escenario A: Modelo Base (Sin Hot Hand)
-    print("\n--- EJECUTANDO ESCENARIO A (CONTROL: SIN HOT HAND) ---")
-    results_a = run_master_backtest(start_date, days=days, use_hot_hand=False)
-    
-    # Escenario B: Modelo Alpha (Con Hot Hand)
-    print("\n--- EJECUTANDO ESCENARIO B (ALPHA: CON HOT HAND) ---")
-    results_b = run_master_backtest(start_date, days=days, use_hot_hand=True)
-    
-    # Resumen Comparativo
-    print("\n" + "="*40)
-    print("📊 REPORTE DE MEJORA ESTRUCTURAL")
-    print("="*40)
+def run_comparative_audit(start_date="2025-04-01", days=175):
+    print(f"🔬 INICIANDO AUDITORÍA COMPARATIVA ESTADÍSTICA ({days} días)")
+    print("El objetivo es probar si la Capa 2 (Hot Hand) genera una mejora real o azarosa.\n")
 
-    # Verificación de integridad de datos para evitar TypeError
-    if results_a and results_b:
-        # Extraemos valores con seguridad usando .get()
-        roi_a = results_a.get('roi', 0)
-        roi_b = results_b.get('roi', 0)
-        edge_a = results_a.get('avg_edge', 0)
-        edge_b = results_b.get('avg_edge', 0)
-        win_a = results_a.get('win_rate', 0)
-        win_b = results_b.get('win_rate', 0)
-
-        print(f"✅ Escenario A (Base): ROI {roi_a:.2f}% | WinRate {win_a:.1f}% | Avg Edge {edge_a:.2f}%")
-        print(f"✅ Escenario B (HotHand): ROI {roi_b:.2f}% | WinRate {win_b:.1f}% | Avg Edge {edge_b:.2f}%")
-        print("-" * 40)
-        print(f"🚀 DIFERENCIA DE ALPHA (B - A): {edge_b - edge_a:+.2f}%")
-        print(f"💰 DIFERENCIA DE RENTABILIDAD: {roi_b - roi_a:+.2f}%")
-    else:
-        print("\n⚠️ RESULTADOS INCOMPLETOS")
-        print("El modelo no encontró suficientes apuestas en uno o ambos escenarios.")
-        print("Sugerencia: Abre 'backtest_master.py' y reduce el 'MIN_EDGE' a 0.005 para forzar actividad.")
+    print("--- ESCENARIO A: Modelo Estructural Puro (Hot Hand OFF) ---")
+    res_A = run_master_backtest(start_date, days=days, use_hot_hand=False)
     
-    print("="*40)
+    print("\n--- ESCENARIO B: Modelo Dinámico (Hot Hand ON al 5%) ---")
+    res_B = run_master_backtest(start_date, days=days, use_hot_hand=True)
+
+    if res_A and res_B:
+        won_A, bets_A = int(res_A['win_rate'] * res_A['bets'] / 100), res_A['bets']
+        won_B, bets_B = int(res_B['win_rate'] * res_B['bets'] / 100), res_B['bets']
+
+        print("\n" + "="*50)
+        print("⚖️ PRUEBA DE SIGNIFICANCIA ESTADÍSTICA (Z-Test)")
+        print("="*50)
+        print(f"Modelo Puro:     {res_A['win_rate']:.2f}% ({won_A}/{bets_A} picks) | ROI: {res_A['roi']:.2f}%")
+        print(f"Modelo Dinámico: {res_B['win_rate']:.2f}% ({won_B}/{bets_B} picks) | ROI: {res_B['roi']:.2f}%")
+        
+        # Test de proporciones (para ver si la diferencia es real o suerte)
+        count = [won_A, won_B]
+        nobs = [bets_A, bets_B]
+        stat, pval = proportions_ztest(count, nobs)
+        
+        print("-" * 50)
+        print(f"Diferencia P-Value: {pval:.4f}")
+        if pval < 0.05:
+            print("✅ CONCLUSIÓN: La diferencia ES estadísticamente significativa.")
+        else:
+            print("⚠️ CONCLUSIÓN: La diferencia NO supera el ruido estadístico. (Se requiere más muestra).")
 
 if __name__ == "__main__":
-    # Puedes poner 1 de julio, 20 días, y el motor hará el resto.
-    run_comparative_audit("2025-07-01", days=20)
+    run_comparative_audit()

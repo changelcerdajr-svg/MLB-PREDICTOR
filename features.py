@@ -3,7 +3,8 @@
 
 import numpy as np
 import math
-from scipy.stats import nbinom  # <-- NUEVA IMPORTACIÓN
+from scipy.stats import nbinom
+import config 
 from config import PARK_FACTORS
 
 # Base empírica de orientaciones (Grados desde el Norte geográfico hacia el CF)
@@ -43,7 +44,6 @@ STADIUM_AZIMUTHS = {
 }
 
 class FeatureEngine:
-    
     @staticmethod
     def get_park_factor(venue_id):
         return PARK_FACTORS['runs'].get(venue_id, 1.00)
@@ -102,6 +102,9 @@ class FeatureEngine:
         babip = p_stats.get('babip', 0.300) if p_stats else 0.300
         era_real = p_stats.get('era', None) if p_stats else None
         
+        # --- NUEVO: Extraemos K/9 del diccionario (promedio 7.5 si falla) ---
+        sp_k9 = p_stats.get('k9', 7.5) if p_stats else 7.5 
+        
         # --- FIX ALTO: Evitar doble correccion de suerte ---
         if era_real and not p_stats.get('xera'):
             luck_adjustment = (babip - 0.300) * 2.0
@@ -109,10 +112,33 @@ class FeatureEngine:
         else:
             starter_xera = base_xera # xERA ya elimina la suerte del BABIP
             
-        bullpen_era = bullpen_stats.get('fip', 4.10) if bullpen_stats else 4.10
         bullpen_fip = bullpen_stats.get('high_leverage_fip', 4.10) if bullpen_stats else 4.10
         
-        prevention_score = (starter_xera * 0.70) + (bullpen_fip * 0.30)
+        # =====================================================================
+        # CIRUGÍA CUANTITATIVA: Peso Dinámico y Penalización por K/9
+        # =====================================================================
+        # 1. Dinámica de Entradas (Innings) basada en Talento
+        if starter_xera < 3.50:
+            sp_weight = 0.65 # Pitcher élite lanza 6+ innings
+        elif starter_xera > 4.50:
+            sp_weight = 0.50 # Pitcher débil explota temprano, expone al bullpen
+        else:
+            sp_weight = 0.58 # Promedio
+            
+        # 2. Penalización por Varianza (El Factor K/9)
+        k9_penalty = 0.0
+        if sp_k9 < 7.0:
+            k9_penalty = 0.25 # Peligroso: Depende mucho de la defensa (Ej. Mets)
+        elif sp_k9 > 9.5:
+            k9_penalty = -0.15 # Élite: Elimina la varianza del juego (Ej. D-Backs)
+            
+        # 3. xERA Ajustado
+        adjusted_sp_xera = starter_xera + k9_penalty
+        bp_weight = 1.0 - sp_weight
+        
+        # 4. Mezcla Final Dinámica
+        prevention_score = (adjusted_sp_xera * sp_weight) + (bullpen_fip * bp_weight)
+        # =====================================================================
         
         if isinstance(fielding_factor, dict):
             ff_value = fielding_factor.get('fielding', 0.985)
@@ -123,86 +149,60 @@ class FeatureEngine:
         capped_fatigue = min(fatigue, 0.45)
         return max(2.0, (prevention_score * ff_value) + capped_fatigue)
     
-    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, pf=1.00, h_k9=9.0, a_k9=9.0, h_ip=0, a_ip=0, hfa=1.04):
+    def run_monte_carlo_simulation(self, h_pow, h_def, a_pow, a_def, rounds, league_avg_runs, h_k9=9.0, a_k9=9.0, h_ip=0, a_ip=0, hfa=1.04):
         a_def_scalar = a_def / league_avg_runs
         h_def_scalar = h_def / league_avg_runs
 
         h_lambda = (h_pow * a_def_scalar) * hfa
         a_lambda = (a_pow * h_def_scalar) * (1.0 / hfa)
 
-        # --- MODELADO DE INCERTIDUMBRE GAUSSIANA V18.0 ---
-        # A menos IP, mayor es la campana de Gauss (incertidumbre del talento).
-        # Un novato (0 IP) tiene ~25% de error; un veterano (160+ IP) baja al ~5%.
+        # FIX ALTO 4: Reducir piso de incertidumbre y acelerar decaimiento
         def calculate_uncertainty(ip):
-            return 0.05 + (0.20 * math.exp(-max(0, ip) / 40.0))
+            return 0.02 + (0.12 * math.exp(-max(0, ip) / 25.0))
 
         h_unc = calculate_uncertainty(h_ip)
         a_unc = calculate_uncertainty(a_ip)
 
-        # Claridad conceptual cruzada:
-        # La incertidumbre del pitcher local (h_unc) afecta las carreras del visitante (a_vol)
-        # La incertidumbre del pitcher visitante (a_unc) afecta las carreras del local (h_vol)
-        h_vol = a_unc * (9.0 / max(4.0, a_k9))
-        a_vol = h_unc * (9.0 / max(4.0, h_k9))
-
-        # --- FIX ALTO: Truncado realista para evitar masa negativa en la Gaussiana ---
-        h_lambda_dist = np.maximum(
-            np.random.normal(h_lambda, h_lambda * h_vol, rounds),
-            0.5  # minimo realista: 0.5 carreras esperadas por partido
-        )
-        a_lambda_dist = np.maximum(
-            np.random.normal(a_lambda, a_lambda * a_vol, rounds),
-            0.5
-        )
-        # --------------------------------------------------
+        # FIX CRÍTICO 1: Lambdas deterministas (eliminar ruido Normal extra)
+        h_lambda_dist = np.full(rounds, h_lambda)
+        a_lambda_dist = np.full(rounds, a_lambda)
+        
+        # Necesitamos el lambda base dividido por 9 innings
+        h_inn_base_lambda = h_lambda_dist / 9.0
+        a_inn_base_lambda = a_lambda_dist / 9.0
     
-        # Ajuste VMR para la Binomial Negativa
-    
-        # Ajuste VMR para la Binomial Negativa
-        avg_k9 = (h_k9 + a_k9) / 2.0
-        k9_adj = 9.0 / max(1.0, avg_k9)
-        target_vmr = 1.0 + (0.8 * k9_adj)
+        # FIX CRÍTICO 5 (VMR Asimétrico integrado): La varianza depende del pitcher rival
+        h_target_vmr = 1.0 + (0.6 * a_k9/9.0) * (1.0 + a_unc * 0.5)
+        a_target_vmr = 1.0 + (0.6 * h_k9/9.0) * (1.0 + h_unc * 0.5)
         
         def nbinom_sample(mu, vmr):
             mu = np.maximum(mu, 0.001) 
             safe_vmr = max(1.05, vmr) 
             r = mu / (safe_vmr - 1.0)
             p = r / (r + mu)
-            # --- FIX ALTO: SciPy nbinom.rvs acepta arrays float para 'r' ---
             return nbinom.rvs(r, p)
-
-        # --- NUEVO: MOTOR DE MARKOV INNING POR INNING (V19.1) ---
-        # Dividimos la expectativa total entre 9 entradas
-        h_inn_base_lambda = h_lambda_dist / 9.0
-        a_inn_base_lambda = a_lambda_dist / 9.0
         
         h_scores = np.zeros(rounds)
         a_scores = np.zeros(rounds)
         
-        # Memoria del modelo de Markov (¿Anotó en el inning anterior?)
         h_scored_last = np.zeros(rounds, dtype=bool)
         a_scored_last = np.zeros(rounds, dtype=bool)
         
-        # FIX: Ajuste empírico a +5% basado en data real de Retrosheet
-        MARKOV_MULTIPLIER = 1.05 
-        
         for inn in range(9):
-            # Aplicamos la inercia (Momentum intradía)
-            h_lambda_cur = np.where(h_scored_last, h_inn_base_lambda * MARKOV_MULTIPLIER, h_inn_base_lambda)
-            a_lambda_cur = np.where(a_scored_last, a_inn_base_lambda * MARKOV_MULTIPLIER, a_inn_base_lambda)
+            # ACCESO DINÁMICO
+            h_lambda_cur = np.where(h_scored_last, h_inn_base_lambda * config.MARKOV_MULTIPLIER, h_inn_base_lambda)
+            a_lambda_cur = np.where(a_scored_last, a_inn_base_lambda * config.MARKOV_MULTIPLIER, a_inn_base_lambda)
             
-            # Simulamos las carreras de este inning específico
-            h_inn_runs = nbinom_sample(h_lambda_cur, target_vmr)
-            a_inn_runs = nbinom_sample(a_lambda_cur, target_vmr)
+            # Usar los VMR asimétricos correctamente
+            h_inn_runs = nbinom_sample(h_lambda_cur, h_target_vmr)
+            a_inn_runs = nbinom_sample(a_lambda_cur, a_target_vmr)
             
             h_scores += h_inn_runs
             a_scores += a_inn_runs
             
-            # Actualizamos la memoria para el siguiente inning
             h_scored_last = h_inn_runs > 0
             a_scored_last = a_inn_runs > 0
 
-        # --- RESOLUCIÓN DE EXTRA INNINGS (Corredor Fantasma) ---
         ties_mask = (h_scores == a_scores)
         
         MAX_EXTRA = 12
@@ -210,23 +210,21 @@ class FeatureEngine:
             if not np.any(ties_mask):
                 break 
             
-            h_lambda_ex = h_inn_base_lambda[ties_mask] * 1.8
-            a_lambda_ex = a_inn_base_lambda[ties_mask] * 1.8
+            h_lambda_ex = h_inn_base_lambda[ties_mask] * config.EXTRA_INNING_MULTIPLIER
+            a_lambda_ex = a_inn_base_lambda[ties_mask] * config.EXTRA_INNING_MULTIPLIER
             
-            h_scores[ties_mask] += nbinom_sample(h_lambda_ex, target_vmr)
-            a_scores[ties_mask] += nbinom_sample(a_lambda_ex, target_vmr)
+            # Usar los VMR asimétricos correctamente en Extra Innings
+            h_scores[ties_mask] += nbinom_sample(h_lambda_ex, h_target_vmr)
+            a_scores[ties_mask] += nbinom_sample(a_lambda_ex, a_target_vmr)
             
             ties_mask = (h_scores == a_scores)
 
-        # --- RESOLUCION RESIDUAL (ANTIFALLOS) ---
         if np.any(ties_mask):
             num_ties = ties_mask.sum()
             residual_winners = np.random.choice([0.0, 1.0], size=num_ties)
-            
             h_scores[ties_mask] += residual_winners
             a_scores[ties_mask] += (1.0 - residual_winners)
 
-        # Vector de victorias (ya no hay empates)
         wins_array = (h_scores > a_scores).astype(float)
         
         return float(np.mean(wins_array)), float(np.mean(h_scores)), float(np.mean(a_scores)), float(np.var(wins_array))

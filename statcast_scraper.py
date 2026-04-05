@@ -31,20 +31,22 @@ class StatcastScraper:
         os.replace(temp_path, file_path)
 
     def fetch_batters(self, year, hand=None, force=False):
-        """Descarga xwOBA con lógica de ahorro de peticiones y splits reales (V18.0)."""
+        """Descarga xwOBA con lógica de ahorro de peticiones y splits reales (V18.1)."""
         file_name = f"batters_{year}_{hand}.csv" if hand else f"batters_{year}.csv"
         file_path = os.path.join(self.data_dir, file_name)
 
-        # No descargar de nuevo si el año ya pasó y el archivo existe
         if not force and year < CURRENT_SEASON and os.path.exists(file_path):
             return True
 
-        # --- CIRUGÍA DE DATOS V18.0: CAMBIO DE ENDPOINT ---
+        # --- AÑADE ESTO PARA ROMPER EL SILENCIO ---
+        tipo = f"vs {hand}" if hand else "Consolidado"
+        print(f"  [📥] Descarga de Emergencia: Bateadores {year} ({tipo})...")
+
+        # --- CIRUGÍA DE DATOS V18.1: URL CORREGIDA ---
         if hand:
-            # Para splits reales, usamos el Player Stat Search
-            url = f"https://baseballsavant.mlb.com/player-stat-search/csv?all=true&group=name&player_type=batter&position=&game_type=R&split_type=handedness&year={year}&hand={hand}&current_stat=expected&min_results=1"
+            # Usar el endpoint líder robusto, pero añadiendo la mano del pitcher
+            url = f"{self.base_url}?type=batter&year={year}&position=&team=&min=1&pitch_hand={hand}&csv=true"
         else:
-            # Para el talento global base, mantenemos el Leaderboard
             url = f"{self.base_url}?type=batter&year={year}&position=&team=&min=1&csv=true"
         
         try:
@@ -52,16 +54,13 @@ class StatcastScraper:
             if r.status_code == 200:
                 df = pd.read_csv(io.StringIO(r.text))
                 
-                # Baseball Savant cambia los nombres de las columnas según el endpoint
                 possible_cols = ['xwoba', 'est_woba', 'expected_woba']
                 target_col = next((c for c in possible_cols if c in df.columns), None)
                 
-                # Asegurar que el ID del jugador exista sin importar el formato del CSV
                 id_cols = ['player_id', 'id', 'batter']
                 id_col = next((c for c in id_cols if c in df.columns), 'player_id')
                 
                 if target_col and id_col in df.columns:
-                    # Limpieza y normalización
                     df[target_col] = df[target_col].fillna(0.315) 
                     df = df.rename(columns={target_col: 'est_woba', id_col: 'player_id'})
                     
@@ -71,19 +70,24 @@ class StatcastScraper:
                     self.batters_cache[cache_key] = df.set_index('player_id')['est_woba'].to_dict()
                     return True
                 else:
-                    print(f"⚠️ Columnas no encontradas en el CSV de Savant para {year} hand={hand}")
+                    print(f"  [!] Alerta: Columnas no encontradas en el CSV para {year} (hand={hand})")
+            else:
+                # AHORA SÍ NOS AVISARÁ SI LA API NOS RECHAZA
+                print(f"  [❌] Error API: Savant respondió con código {r.status_code} para {year} (hand={hand})")
+                
         except Exception as e:
-            print(f"⚠️ Error Savant Batters {year}: {e}")
+            print(f"  [⚠️] Excepción en Savant Batters {year}: {e}")
         return False
 
     def fetch_pitchers(self, year, force=False):
         """Descarga xERA con buscador dinámico de métricas."""
         file_path = os.path.join(self.data_dir, f"pitchers_{year}.csv")
     
-        # FIX: Usar la variable dinámica para proteger el caché histórico
         if not force and year < CURRENT_SEASON and os.path.exists(file_path):
-            print(f"[CACHE] Datos de pitchers {year} cargados desde disco.")
             return True
+
+        # --- AÑADE ESTO PARA ROMPER EL SILENCIO ---
+        print(f"  [📥] Descarga de Emergencia: Pitchers {year}...")
 
         url = f"{self.base_url}?type=pitcher&year={year}&position=&team=&min=1&csv=true"
         try:
@@ -104,21 +108,41 @@ class StatcastScraper:
         return False
 
     def get_batter_xwoba(self, player_id, year, vs_hand=None):
-        """Recupera xwOBA del caché o disco."""
-        cache_key = f"{year}_{vs_hand}" if vs_hand else year
+        """Recupera xwOBA con sistema de respaldo para evitar bloqueos por falta de splits L/R."""
+        cache_key = f"{year}_{vs_hand}" if vs_hand else str(year)
         
         if cache_key not in self.batters_cache:
             file_name = f"batters_{year}_{vs_hand}.csv" if vs_hand else f"batters_{year}.csv"
             file_path = os.path.join(self.data_dir, file_name)
             
+            # 1. Si no existe el específico, intentamos descargarlo
+            if not os.path.exists(file_path):
+                self.fetch_batters(year, hand=vs_hand)
+            
+            # 2. SISTEMA DE RESPALDO (El Fix):
+            # Si buscaba un archivo 'R' o 'L' y no se creó, usamos el general.
+            if not os.path.exists(file_path) and vs_hand:
+                general_path = os.path.join(self.data_dir, f"batters_{year}.csv")
+                if os.path.exists(general_path):
+                    # Encontramos el archivo general que sí tienes en tu carpeta
+                    file_path = general_path 
+            
+            # 3. Leemos el archivo que hayamos encontrado
             if os.path.exists(file_path):
                 df = pd.read_csv(file_path)
+                df['player_id'] = pd.to_numeric(df['player_id'], errors='coerce')
                 self.batters_cache[cache_key] = df.set_index('player_id')['est_woba'].to_dict()
             else:
-                self.fetch_batters(year, hand=vs_hand)
-        
-        return self.batters_cache.get(cache_key, {}).get(player_id)
-
+                # Vacuna contra ciclos infinitos si de plano no hay datos
+                self.batters_cache[cache_key] = {} 
+                
+        try:
+            player_id_num = int(player_id)
+        except (ValueError, TypeError):
+            return None
+            
+        return self.batters_cache[cache_key].get(player_id_num)
+    
     def get_pitcher_xera(self, player_id, year):
         """Recupera xERA con fallback de seguridad."""
         if year not in self.pitchers_cache:
@@ -136,13 +160,25 @@ class StatcastScraper:
         return self.pitchers_cache.get(year, {}).get(player_id)
 
 if __name__ == "__main__":
-    print("🔄 Iniciando descarga de métricas Statcast (xwOBA / xERA)...")
+    print("🔄 Iniciando descarga de métricas Statcast (xwOBA / xERA) V18.0...")
     scraper = StatcastScraper()
-    # Sincronización inicial rápida
-    for y in [2025, 2026]:
-        print(f"   -> Procesando año {y}...")
-        scraper.fetch_batters(y)
-        scraper.fetch_pitchers(y)
-        # Pausa de cortesía para evitar rate-limiting
+    
+    # Sincronización completa (Años relevantes para backtest y temporada actual)
+    # Incluimos desde 2023 para asegurarnos que los Priors históricos funcionen
+    for y in [2023, 2024, 2025, 2026]:
+        print(f"\n🚀 Procesando año {y}...")
+        
+        # 1. Talento Consolidado
+        print("   -> Descargando Talento Consolidado (Bateadores/Pitchers)...")
+        scraper.fetch_batters(y, force=True) 
+        scraper.fetch_pitchers(y, force=True)
+        time.sleep(2) # Cortesía API
+        
+        # 2. Platoon Splits (El secreto para el Alpha real)
+        print("   -> Descargando Platoon Splits (vs Zurdos y Zurdos)...")
+        scraper.fetch_batters(y, hand='R', force=True) # Bateadores vs Derechos
         time.sleep(2)
-    print("✅ ¡Actualización de Statcast completada con éxito!")
+        scraper.fetch_batters(y, hand='L', force=True) # Bateadores vs Zurdos
+        time.sleep(2)
+        
+    print("\n✅ ¡Actualización de Statcast completada con éxito! (Platoon Splits activos)")
